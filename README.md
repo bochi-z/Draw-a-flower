@@ -1,6 +1,12 @@
-# 3D Flowers (Python Turtle)
+<p align="center">
+  <img src="assets/rose_icon.png" alt="3D Flowers Logo" width="96" />
+</p>
 
-An interactive 3D flower viewer built in pure Python (`turtle` + `tkinter`) with **zero external dependencies**.
+<h1 align="center">3D Flowers (Python Turtle)</h1>
+
+<p align="center">
+  An interactive 3D flower viewer built in pure Python (<code>turtle</code> + <code>tkinter</code>) with <b>zero external dependencies</b>.
+</p>
 
 > **Note:** The whole project was fully made with **Antigravity**.
 
