@@ -1,47 +1,61 @@
-# 3D Rotating Rose (Python Turtle)
+# 3D Flowers (Python Turtle)
 
-An interactive 3D layered scarlet rose rendered using Python's standard-library `turtle` module with zero external runtime dependencies.
+An interactive 3D flower viewer built in pure Python (`turtle` + `tkinter`) with **zero external dependencies**.
 
 > **Note:** The whole project was fully made with **Antigravity**.
 
-## Features
+## What's Inside
 
-- **3D Botanical Rose Geometry**:
-  - 26 overlapping cupped petals arranged along a golden-angle phyllotaxis spiral (`137.5°`).
-  - Floral receptacle, 5 reflexed calyx sepals, curved stem, 3 thorns, and 3 V-folded leaves attached directly to the stem.
-- **Overhead Startup Bloom & Camera Tween**: Starts looking down into the opening rosebud over ~2.6 seconds, then smoothly glides down to a 3/4 view over ~1.6 seconds.
-- **Smooth 3D Shading & 60 FPS Pooled Rendering**:
-  - Double-sided petal lighting with wrapped diffuse illumination, soft cream bounce light, velvety specular sheen, and inner-petal ambient occlusion.
-  - Back-to-front depth sorting (`build_draw_list`) rendered into a reusable `turtle` polygon pool locked to 60 FPS onto a `600×600` soft-cream canvas (`#FAF5EC`).
-- **Translucent HUD, Speed Slider & FPS Counter (`Google Sans` + `Material Symbols`)**:
-  - Top-left FPS badge, bottom translucent frosted control pill, and an interactive **Speed** slider pill stacked directly above the controls HUD (`1.0x`–`5.0x` rotation speed) rendered with bundled `Google Sans` fonts (`assets/fonts/`) and `Google Material Symbols` icons (`assets/icons/`).
-  - HUD controls start dimmed/locked during the intro bloom & camera tween and fade smoothly to warm cream once interactive.
-- **Custom 1:1 Window & Taskbar Icon**:
-  - Minimalist scarlet rose squircle icon saved in `assets/rose_icon.png` (`1024×1024` master PNG) and `assets/rose_icon.ico` (multi-resolution Windows icon), wired into `rose_3d.py` via `wm_iconbitmap` (with Windows AppUserModelID) and `wm_iconphoto` fallback.
-- **Interactive Camera & Playback Controls**:
-  - **Speed slider** (above the bottom controls HUD): Click or drag to adjust auto-rotation speed between `1.0x` and `5.0x`
-  - **Mouse drag**: Orbit horizontally (yaw) and tilt vertically (pitch)
-  - **Mouse wheel** (or `+` / `-`): Zoom in and out
-  - **Arrow keys**: Fine camera orbit and tilt
-  - **`Space`**: Pause / resume auto-rotation
-  - **`B`**: Replay the bud-to-bloom unfurling animation
-  - **`R`**: Reset to the startup bloom and camera animation
-  - **`F11`**: Toggle fullscreen mode
-  - **`Esc`**: Exit fullscreen (or close the window when windowed)
+- **5 Flower Species** — Rose, Tulip, Lotus, Sunflower, and Sakura, each with an opening bloom animation and multiple color varieties (cultivars).
+- **4 Lighting Moods** — Daylight, Golden, Sage, and Twilight (dark mode).
+- **Interactive Motion** — Toggleable gentle wind breeze, live **Speed** and **Bloom** sliders, and smooth mouse orbit and zoom.
+- **Detail Modes** — Switch between **Standard** (60 FPS) and **Lush** (higher detail) anytime.
+- **On-Screen HUD** — Clickable pills and sliders styled with bundled `Google Sans` fonts and `Material Symbols` icons, plus a custom window icon.
 
-## Running
+## Run
 
-Requires Python 3.10+ with standard-library `tkinter`/`turtle` support (no `pip install` needed):
+Requires **Python 3.10+** with standard `tkinter`/`turtle` support (no `pip install` needed):
 
 ```bash
-python rose_3d.py
+python flowers_3d.py
 ```
 
-On Windows, `rose_3d.py` automatically relaunches detached via `pythonw.exe` so no console window stays open behind the main window (pass `--no-detach` to stay attached to the terminal for debugging).
+On Windows, the app automatically detaches via `pythonw.exe` so no terminal window stays open behind it (pass `--no-detach` to keep console output).
+
+## Controls
+
+Click the on-screen HUD buttons/sliders directly, or use keyboard and mouse shortcuts:
+
+| Input | Action |
+| --- | --- |
+| **Mouse Drag** / **Arrow Keys** | Orbit and tilt camera |
+| **Mouse Wheel** / **`+`** **`-`** | Zoom in and out |
+| **Speed / Bloom Sliders** | Adjust spin speed (`1.0x`–`5.0x`) or bloom (`0%`–`100%`) |
+| **`Shift + Scroll`** | Adjust bloom openness (`±5%`) |
+| **`1`–`5`** / **`F`** | Pick or cycle flower (Rose, Tulip, Lotus, Sunflower, Sakura) |
+| **`C`** | Cycle color variety (cultivar) |
+| **`M`** | Cycle lighting mood (Daylight, Golden, Sage, Twilight) |
+| **`W`** | Toggle wind breeze |
+| **`D`** | Toggle Standard / Lush detail |
+| **`Space`** | Pause / resume auto-rotation |
+| **`B`** / **`R`** | Replay bloom (`B`) or reset view (`R`) |
+| **`F11`** / **`Esc`** | Toggle fullscreen (`F11`) or exit (`Esc`) |
+
+## Project Structure
+
+```text
+Draw-a-flower/
+├── flowers_3d.py        # 3D flower geometry, lighting, animation, HUD & app loop
+├── README.md            # Project guide
+├── .gitignore           # Ignores __pycache__ and compiled Python files
+└── assets/
+    ├── rose_icon.png    # App icon (PNG)
+    ├── rose_icon.ico    # Windows window & taskbar icon
+    ├── fonts/           # Bundled Google Sans fonts & OFL.txt
+    └── icons/           # 13 HUD icons & Apache-2.0 LICENSE
+```
 
 ## Credits
 
 - **Antigravity**: This whole project was fully made with Antigravity.
-- **Bundled Assets**:
-  - `Google Sans` fonts (`assets/fonts/OFL.txt`, SIL Open Font License 1.1)
-  - `Google Material Symbols` icons (`assets/icons/LICENSE`, Apache License 2.0)
+- **Fonts & Icons**: `Google Sans` ([`OFL.txt`](assets/fonts/OFL.txt)) and `Google Material Symbols` ([`LICENSE`](assets/icons/LICENSE)).

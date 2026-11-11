@@ -10,3 +10,9 @@ Icons included (14x14 RGBA PNG, tinted #4A4239):
 - bloom.png  <- symbols/web/spa/materialsymbolsrounded/spa_wght500_20px.svg
 - reset.png  <- symbols/web/refresh/materialsymbolsrounded/refresh_wght500_20px.svg
 - speed.png  <- symbols/web/speed/materialsymbolsrounded/speed_wght500_20px.svg
+- palette.png      <- symbols/web/palette/materialsymbolsrounded/palette_wght500_20px.svg
+- light_mode.png   <- symbols/web/light_mode/materialsymbolsrounded/light_mode_wght500_20px.svg
+- dark_mode.png    <- symbols/web/dark_mode/materialsymbolsrounded/dark_mode_wght500_20px.svg
+- air.png          <- symbols/web/air/materialsymbolsrounded/air_wght500_20px.svg
+- auto_awesome.png <- symbols/web/auto_awesome/materialsymbolsrounded/auto_awesome_wght500_20px.svg
+- local_florist.png <- symbols/web/local_florist/materialsymbolsrounded/local_florist_wght500_20px.svg
