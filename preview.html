@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Flowers — Gameplay Showcases Live Preview</title>
+  <link rel="icon" type="image/png" href="assets/rose_icon.png">
+  <style>
+    @font-face {
+      font-family: 'Google Sans';
+      src: url('assets/fonts/GoogleSans-Regular.ttf') format('truetype');
+      font-weight: 400;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Google Sans';
+      src: url('assets/fonts/GoogleSans-Medium.ttf') format('truetype');
+      font-weight: 500;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Google Sans';
+      src: url('assets/fonts/GoogleSans-Bold.ttf') format('truetype');
+      font-weight: 700;
+      font-style: normal;
+    }
+
+    :root {
+      --bg-color: #FAF5EC;
+      --card-bg: rgba(255, 255, 255, 0.85);
+      --card-border: rgba(190, 178, 160, 0.45);
+      --ink: #4A4239;
+      --ink-muted: #7A7268;
+      --accent: #D42230;
+      --accent-soft: rgba(212, 34, 48, 0.08);
+      --chip-bg: rgba(245, 238, 226, 0.9);
+      --chip-active-bg: #4A4239;
+      --chip-active-text: #FAF5EC;
+      --radius: 14px;
+      --shadow: 0 4px 18px rgba(74, 66, 57, 0.08);
+      --shadow-hover: 0 8px 26px rgba(74, 66, 57, 0.16);
+    }
+
+    body.dark-mode {
+      --bg-color: #141822;
+      --card-bg: rgba(28, 33, 44, 0.85);
+      --card-border: rgba(70, 78, 96, 0.5);
+      --ink: #E8E6E3;
+      --ink-muted: #A0A5B2;
+      --accent: #FF5A66;
+      --accent-soft: rgba(255, 90, 102, 0.15);
+      --chip-bg: rgba(36, 42, 56, 0.9);
+      --chip-active-bg: #E8E6E3;
+      --chip-active-text: #141822;
+      --shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+      --shadow-hover: 0 8px 28px rgba(0, 0, 0, 0.55);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--ink);
+      line-height: 1.5;
+      padding: 32px 20px;
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
+
+    .container {
+      max-width: 1240px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .app-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    }
+
+    h1 {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    .subtitle {
+      font-size: 14px;
+      color: var(--ink-muted);
+    }
+
+    .theme-toggle-btn {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--ink);
+      padding: 8px 16px;
+      border-radius: 30px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: var(--shadow);
+      transition: all 0.2s ease;
+    }
+
+    .theme-toggle-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-hover);
+    }
+
+    /* Hero Spotlight Player */
+    .hero-spotlight {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 24px;
+      margin-bottom: 32px;
+      display: grid;
+      grid-template-columns: minmax(320px, 480px) 1fr;
+      gap: 28px;
+      align-items: center;
+      backdrop-filter: blur(12px);
+    }
+
+    @media (max-width: 860px) {
+      .hero-spotlight {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .hero-media-wrapper {
+      position: relative;
+      background: rgba(0, 0, 0, 0.04);
+      border-radius: 10px;
+      overflow: hidden;
+      aspect-ratio: 1 / 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05);
+    }
+
+    .hero-media-wrapper img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .hero-info h2 {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .badge {
+      display: inline-block;
+      background: var(--accent);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 6px;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .hero-desc {
+      font-size: 15px;
+      color: var(--ink-muted);
+      margin-bottom: 18px;
+      line-height: 1.6;
+    }
+
+    .hero-features {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 22px;
+    }
+
+    .hero-features li {
+      font-size: 13.5px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .hero-features li::before {
+      content: '✔';
+      color: var(--accent);
+      font-weight: bold;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .action-btn {
+      padding: 9px 18px;
+      border-radius: 8px;
+      font-size: 13.5px;
+      font-weight: 600;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: inherit;
+    }
+
+    .action-primary {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+    }
+
+    .action-primary:hover {
+      filter: brightness(1.1);
+    }
+
+    .action-secondary {
+      background: transparent;
+      color: var(--ink);
+      border: 1px solid var(--card-border);
+    }
+
+    .action-secondary:hover {
+      background: var(--accent-soft);
+    }
+
+    /* Filter Bar */
+    .filter-bar {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+
+    .filter-chip {
+      background: var(--chip-bg);
+      border: 1px solid var(--card-border);
+      color: var(--ink);
+      padding: 7px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: inherit;
+    }
+
+    .filter-chip.active, .filter-chip:hover {
+      background: var(--chip-active-bg);
+      color: var(--chip-active-text);
+      border-color: var(--chip-active-bg);
+    }
+
+    /* Showcase Grid */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 20px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      cursor: pointer;
+      transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-hover);
+      border-color: var(--accent);
+    }
+
+    .card.selected {
+      border: 2px solid var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow-hover);
+    }
+
+    .card-thumb {
+      position: relative;
+      aspect-ratio: 1 / 1;
+      background: rgba(0, 0, 0, 0.03);
+      overflow: hidden;
+    }
+
+    .card-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .card-duration {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.72);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 7px;
+      border-radius: 6px;
+      backdrop-filter: blur(4px);
+    }
+
+    .card-body {
+      padding: 16px;
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .card-desc {
+      font-size: 13px;
+      color: var(--ink-muted);
+      line-height: 1.45;
+      flex-grow: 1;
+    }
+
+    footer {
+      margin-top: 48px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--ink-muted);
+    }
+
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="header-left">
+        <img src="assets/rose_icon.png" alt="Rose Icon" class="app-icon">
+        <div>
+          <h1>3D Flowers — Gameplay Showcases</h1>
+          <p class="subtitle">12 Interactive 10~15s recordings captured with zero external dependencies</p>
+        </div>
+      </div>
+      <button class="theme-toggle-btn" id="themeToggle" onclick="toggleTheme()">
+        <span id="themeIcon">🌙</span> <span id="themeLabel">Twilight Mode</span>
+      </button>
+    </header>
+
+    <!-- Hero Spotlight Player -->
+    <section class="hero-spotlight" id="heroSection">
+      <div class="hero-media-wrapper">
+        <img id="heroImage" src="showcases/01_full_gameplay_tour_15s.gif" alt="Full Gameplay Tour">
+      </div>
+      <div class="hero-info">
+        <span class="badge" id="heroBadge">15 SECONDS</span>
+        <h2 id="heroTitle">01. Full Gameplay Tour</h2>
+        <p class="hero-desc" id="heroDesc">Comprehensive gameplay tour featuring bud-to-bloom unfurling, Noir cultivar, wind breeze, Lotus in Sage, Sunflower in Golden, and Sakura in Twilight dark mode.</p>
+        <ul class="hero-features" id="heroFeatures">
+          <li>5 botanical species: Rose, Tulip, Lotus, Sunflower, Sakura</li>
+          <li>Real-time bloom scrubber and wind sway</li>
+          <li>Adaptive daylight, golden hour & dark twilight lighting</li>
+        </ul>
+        <div class="hero-actions">
+          <a id="heroDownloadBtn" class="action-btn action-primary" href="showcases/01_full_gameplay_tour_15s.gif" download>
+            ⬇ Download GIF
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Filter Bar -->
+    <div class="filter-bar">
+      <button class="filter-chip active" onclick="filterCards('all', this)">All Clips (12)</button>
+      <button class="filter-chip" onclick="filterCards('species', this)">Species Gallery</button>
+      <button class="filter-chip" onclick="filterCards('bloom', this)">Bloom & Orbit</button>
+      <button class="filter-chip" onclick="filterCards('lighting', this)">Lighting & Moods</button>
+      <button class="filter-chip" onclick="filterCards('controls', this)">Controls & Detail</button>
+    </div>
+
+    <!-- Cards Grid -->
+    <div class="grid" id="galleryGrid"></div>
+
+    <footer>
+      <p>3D Flowers &copy; 2026 Antigravity</p>
+    </footer>
+  </div>
+
+  <script>
+    const showcases = [
+      {
+        id: "01",
+        title: "01. Full Gameplay Tour",
+        file: "showcases/01_full_gameplay_tour_15s.gif",
+        duration: "15s",
+        category: "species",
+        desc: "Grand tour: bud-to-bloom unfurling, Noir cultivar, wind breeze, Lotus in Sage, Sunflower in Golden, and Sakura in Twilight.",
+        features: [
+          "Seamless transitions across all 5 botanical species",
+          "Dynamic wind breeze and bloom unfurling animations",
+          "Adaptive lighting across Daylight, Golden, Sage & Twilight"
+        ]
+      },
+      {
+        id: "02",
+        title: "02. Rose Bloom & Orbit",
+        file: "showcases/02_rose_bloom_and_orbit_12s.gif",
+        duration: "12s",
+        category: "bloom",
+        desc: "Scarlet Rose opening from closed bud (0%) to full blossom (100%), followed by 360° camera orbit & zoom.",
+        features: [
+          "Authentic bud-to-bloom multi-tiered petal unfurling",
+          "Smooth 360-degree camera orbit and tilt inertia",
+          "Soft cream Daylight canvas palette"
+        ]
+      },
+      {
+        id: "03",
+        title: "03. Species Gallery",
+        file: "showcases/03_species_gallery_15s.gif",
+        duration: "15s",
+        category: "species",
+        desc: "Tour across all 5 botanical species: Rose (Champagne), Tulip (Crimson), Lotus (Gold), Sunflower (Velvet), and Sakura (Yaezakura).",
+        features: [
+          "5 distinct botanical species with unique morphology",
+          "Distinct cultivars: Champagne, Crimson, Gold, Velvet, Yaezakura",
+          "Wind breeze active with natural organic swaying"
+        ]
+      },
+      {
+        id: "04",
+        title: "04. Lighting Moods & Wind",
+        file: "showcases/04_lighting_moods_and_wind_12s.gif",
+        duration: "12s",
+        category: "lighting",
+        desc: "Tulip swaying organically with wind breeze active while transitioning Daylight → Golden → Sage → Twilight.",
+        features: [
+          "Daylight: soft warm cream botanical canvas",
+          "Golden: warm afternoon sun with rich tones",
+          "Sage: calm organic green mood; Twilight: dark mode"
+        ]
+      },
+      {
+        id: "05",
+        title: "05. Lotus Twilight Unfurl",
+        file: "showcases/05_lotus_twilight_unfurl_10s.gif",
+        duration: "10s",
+        category: "bloom",
+        desc: "Sacred Lotus bud unfurling petals and pistils in dark Twilight mood with gentle aquatic breeze.",
+        features: [
+          "Lotus bud unfurling in Twilight dark mode (#141822)",
+          "Petal whorls and central seed pod emergence",
+          "Smooth camera zoom-in during bloom"
+        ]
+      },
+      {
+        id: "06",
+        title: "06. Sunflower Golden Orbit",
+        file: "showcases/06_sunflower_golden_orbit_12s.gif",
+        duration: "12s",
+        category: "lighting",
+        desc: "Classic Sunflower rotating in warm golden hour lighting, tilting to reveal the golden-angle seed disc pattern.",
+        features: [
+          "Authentic Fermat golden-angle florets spiral geometry",
+          "Warm Golden hour lighting highlighting bright yellow petals",
+          "Elevation tilt showing both disc florets and ray petals"
+        ]
+      },
+      {
+        id: "07",
+        title: "07. Tulip Cultivars & Breeze",
+        file: "showcases/07_tulip_cultivars_and_breeze_12s.gif",
+        duration: "12s",
+        category: "species",
+        desc: "Cycling Tulip color varieties: Crimson, Apricot, Ivory, Violet, and Golden with organic wind sway.",
+        features: [
+          "5 curated Tulip color varieties",
+          "Harmonic wind breeze physics simulation",
+          "Silky smooth color transitions"
+        ]
+      },
+      {
+        id: "08",
+        title: "08. Sakura Twilight Breeze",
+        file: "showcases/08_sakura_twilight_breeze_10s.gif",
+        duration: "10s",
+        category: "lighting",
+        desc: "Delicate Yoshino Sakura cherry blossom petals swaying in the evening wind under Twilight dark mode.",
+        features: [
+          "Notched Sakura petals and intricate center stamens",
+          "High contrast glowing petals on dark Twilight background",
+          "Gentle spring breeze oscillation"
+        ]
+      },
+      {
+        id: "09",
+        title: "09. Rose Cultivars Palette",
+        file: "showcases/09_rose_cultivars_palette_12s.gif",
+        duration: "12s",
+        category: "species",
+        desc: "Cycling all Rose cultivar varieties: Scarlet, Champagne, Blush, Amber, Noir, and Coral.",
+        features: [
+          "6 rich rose color cultivars demonstrated in sequence",
+          "Noir cultivar with midnight petals and crimson rim lighting",
+          "Authentic petal color gradients"
+        ]
+      },
+      {
+        id: "10",
+        title: "10. Interactive Zoom & Tilt",
+        file: "showcases/10_interactive_zoom_and_tilt_10s.gif",
+        duration: "10s",
+        category: "controls",
+        desc: "Demonstrating smooth camera orbit, elevation tilt, and deep zoom into intricate petal structures.",
+        features: [
+          "Fluid camera zoom into the center petal whorls",
+          "Framerate-independent camera inertia and damping",
+          "No clipping or visual artifacts during close inspection"
+        ]
+      },
+      {
+        id: "11",
+        title: "11. Speed & Motion Controls",
+        file: "showcases/11_speed_and_motion_controls_10s.gif",
+        duration: "10s",
+        category: "controls",
+        desc: "Live speed slider adjustment from gentle 1.0x to 4.0x fast spin and smooth deceleration.",
+        features: [
+          "Live on-screen Speed slider HUD pill response",
+          "Smooth acceleration from 1.0x to 4.0x rotation velocity",
+          "Controlled deceleration back to leisurely showcase speed"
+        ]
+      },
+      {
+        id: "12",
+        title: "12. Lush Detail Comparison",
+        file: "showcases/12_lush_detail_comparison_10s.gif",
+        duration: "10s",
+        category: "controls",
+        desc: "Live switch from Standard mesh tier (60 FPS) to Lush high-detail tessellation tier.",
+        features: [
+          "Dynamic polygon pool growth without dropped frames",
+          "Increased radial & longitudinal petal tessellation",
+          "Maintains smooth interactive framerate in real time"
+        ]
+      }
+    ];
+
+    let currentSelectedId = "01";
+
+    function selectShowcase(item) {
+      currentSelectedId = item.id;
+      document.getElementById('heroImage').src = item.file;
+      document.getElementById('heroBadge').textContent = item.duration.toUpperCase();
+      document.getElementById('heroTitle').textContent = item.title;
+      document.getElementById('heroDesc').textContent = item.desc;
+      document.getElementById('heroDownloadBtn').href = item.file;
+      
+      const featuresEl = document.getElementById('heroFeatures');
+      featuresEl.innerHTML = '';
+      item.features.forEach(feat => {
+        const li = document.createElement('li');
+        li.textContent = feat;
+        featuresEl.appendChild(li);
+      });
+
+      // Highlight selected card
+      document.querySelectorAll('.card').forEach(card => {
+        card.classList.toggle('selected', card.dataset.id === item.id);
+      });
+
+      // Scroll to hero smoothly if needed
+      document.getElementById('heroSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function renderGrid(filter = 'all') {
+      const grid = document.getElementById('galleryGrid');
+      grid.innerHTML = '';
+
+      showcases.forEach(item => {
+        if (filter !== 'all' && item.category !== filter) return;
+
+        const card = document.createElement('div');
+        card.className = `card ${item.id === currentSelectedId ? 'selected' : ''}`;
+        card.dataset.id = item.id;
+        card.onclick = () => selectShowcase(item);
+
+        card.innerHTML = `
+          <div class="card-thumb">
+            <img src="${item.file}" alt="${item.title}" loading="lazy">
+            <span class="card-duration">${item.duration}</span>
+          </div>
+          <div class="card-body">
+            <h3 class="card-title">${item.title}</h3>
+            <p class="card-desc">${item.desc}</p>
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    function filterCards(cat, btn) {
+      document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+      btn.classList.add('active');
+      renderGrid(cat);
+    }
+
+    function toggleTheme() {
+      document.body.classList.toggle('dark-mode');
+      const isDark = document.body.classList.contains('dark-mode');
+      document.getElementById('themeIcon').textContent = isDark ? '☀️' : '🌙';
+      document.getElementById('themeLabel').textContent = isDark ? 'Daylight Mode' : 'Twilight Mode';
+    }
+
+    // Initialize
+    renderGrid('all');
+  </script>
+</body>
+</html>
