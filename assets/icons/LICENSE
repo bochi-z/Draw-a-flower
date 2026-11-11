@@ -1,0 +1,12 @@
+Google Material Symbols Rounded icons sourced from google/material-design-icons.
+Licensed under the Apache License, Version 2.0:
+https://www.apache.org/licenses/LICENSE-2.0
+
+Icons included (14x14 RGBA PNG, tinted #4A4239):
+- orbit.png  <- symbols/web/360/materialsymbolsrounded/360_wght500_20px.svg
+- zoom.png   <- symbols/web/zoom_in/materialsymbolsrounded/zoom_in_20px.svg
+- pause.png  <- symbols/web/pause/materialsymbolsrounded/pause_fill1_20px.svg
+- play.png   <- symbols/web/play_arrow/materialsymbolsrounded/play_arrow_fill1_20px.svg
+- bloom.png  <- symbols/web/spa/materialsymbolsrounded/spa_wght500_20px.svg
+- reset.png  <- symbols/web/refresh/materialsymbolsrounded/refresh_wght500_20px.svg
+- speed.png  <- symbols/web/speed/materialsymbolsrounded/speed_wght500_20px.svg
