@@ -23,7 +23,8 @@
 - **5 Flower Species** — Rose, Tulip, Lotus, Sunflower, and Sakura, each with an opening bloom animation and multiple color varieties (cultivars).
 - **4 Lighting Moods** — Daylight, Golden, Sage, and Twilight (dark mode).
 - **Interactive Motion** — Toggleable gentle wind breeze, live **Speed** and **Bloom** sliders, and smooth mouse orbit and zoom.
-- **Detail Modes** — Switch between **Standard** (60 FPS) and **Lush** (higher detail) anytime.
+- **Detail Modes & Live Face Count** — Switch between **Standard** (60 FPS) and **Lush** detail anytime, with a live mesh face count pill (`len(faces)`).
+- **Ambient BGM Engine** — Pure Python streaming background music player looping `.m4a` tracks in `assets/audios/` with real-time 4-band audio spectrum bars, track time, previous/next skipping, hotkeys, and smooth dynamic label resizing.
 - **On-Screen HUD** — Clickable pills and sliders styled with bundled `Google Sans` fonts and `Material Symbols` icons, plus a custom window icon.
 
 ---
@@ -75,7 +76,9 @@ Click the on-screen HUD buttons/sliders directly, or use keyboard and mouse shor
 | **`C`** | Cycle color variety (cultivar) |
 | **`M`** | Cycle lighting mood (Daylight, Golden, Sage, Twilight) |
 | **`W`** | Toggle wind breeze |
-| **`D`** | Toggle Standard / Lush detail |
+| **`T`** | Toggle Standard / Lush detail tier |
+| **`A`** | Play / Pause BGM (ambient music) |
+| **`S`** / **`D`** | Previous / Next BGM track |
 | **`Space`** | Pause / resume auto-rotation |
 | **`B`** / **`R`** | Replay bloom (`B`) or reset view (`R`) |
 | **`F11`** / **`Esc`** | Toggle fullscreen (`F11`) or exit (`Esc`) |
@@ -109,8 +112,9 @@ Draw-a-flower/
 └── assets/
     ├── rose_icon.png    # App icon (PNG)
     ├── rose_icon.ico    # Windows window & taskbar icon
+    ├── audios/          # Ambient BGM tracks (.m4a)
     ├── fonts/           # Bundled Google Sans fonts & OFL.txt
-    └── icons/           # 13 HUD icons & Apache-2.0 LICENSE
+    └── icons/           # 16 HUD icons & Apache-2.0 LICENSE
 ```
 
 ---
@@ -119,3 +123,4 @@ Draw-a-flower/
 
 - **Antigravity**: This whole project was fully made with Antigravity.
 - **Fonts & Icons**: `Google Sans` ([`OFL.txt`](assets/fonts/OFL.txt)) and `Google Material Symbols` ([`LICENSE`](assets/icons/LICENSE)).
+- **Ambient Music**: Erik Satie – Gymnopédie No. 1 & Claude Debussy – Clair de Lune (Public Domain / Creative Commons).

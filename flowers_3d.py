@@ -15,12 +15,15 @@ Features:
 
 from __future__ import annotations
 
+import array
 import atexit
+from collections import deque
 import math
 import os
 import struct
 import subprocess
 import sys
+import threading
 import time
 import tkinter as tk
 import tkinter.font as tkfont
@@ -88,11 +91,25 @@ TARGET_FPS = 60
 TARGET_FRAME_INTERVAL = 1.0 / TARGET_FPS
 FPS_BADGE_HEIGHT = 26
 FPS_UPDATE_INTERVAL = 0.25  # seconds between FPS badge refreshes
+FACES_BADGE_HEIGHT = FPS_BADGE_HEIGHT
+FACES_BADGE_GAP = 8.0
 
 SWITCHER_HUD_HEIGHT = 26
 SWITCHER_MIN_GAP = 10.0
 SPECIES_HUD_HEIGHT = 26
 SPECIES_STACK_GAP = 8.0
+BGM_HUD_HEIGHT = 26
+BGM_STACK_GAP = 8.0
+BGM_VIZ_BAR_COUNT = 4
+BGM_VIZ_BAR_WIDTH = 2
+BGM_VIZ_BAR_GAP = 2
+BGM_VIZ_MAX_HALF_H = 5.0
+BGM_VIZ_MIN_HALF_H = 1.2
+BGM_SAMPLE_RATE = 44100
+BGM_TOOLTIP_HEIGHT = 24
+BGM_TOOLTIP_GAP = 6.0
+BGM_RESIZE_DURATION = 0.18
+BGM_RESIZE_STEPS = 8
 
 GOLDEN_ANGLE = math.pi * (3.0 - math.sqrt(5.0))
 
@@ -3729,8 +3746,11 @@ class CameraInertia:
 _ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 _FONTS_DIR = _ASSETS_DIR / "fonts"
 _ICONS_DIR = _ASSETS_DIR / "icons"
+_AUDIOS_DIR = _ASSETS_DIR / "audios"
 _APP_ICON_PNG = _ASSETS_DIR / "rose_icon.png"
 _APP_ICON_ICO = _ASSETS_DIR / "rose_icon.ico"
+_AUDIO_EXTENSIONS: tuple[str, ...] = (".m4a",)
+_MAX_AUDIO_BYTES = 128 * 1024 * 1024
 
 _FONT_FILENAMES = (
     "GoogleSans-Regular.ttf",
@@ -3764,6 +3784,13 @@ _ICON_ALIASES = {
     "local_florist": "local_florist",
     "species": "local_florist",
     "flower": "local_florist",
+    "skip_previous": "skip_previous",
+    "previous": "skip_previous",
+    "prev": "skip_previous",
+    "skip_next": "skip_next",
+    "next": "skip_next",
+    "music_note": "music_note",
+    "bgm": "music_note",
 }
 
 _FR_PRIVATE = 0x10
@@ -4613,6 +4640,38 @@ def build_hud_pill_with_icons(
     return (pill_photo, list(layout.segments))
 
 
+def _bake_transition_pill_step(
+    pill_w: int,
+    height: int,
+    rows_geom: Sequence[Sequence[tuple[int, float, float]]],
+    content_left_px: int,
+    item_positions: Sequence[tuple[str, int, int, str]],
+    master: tk.Misc | None,
+    step_idx: int,
+    steps: int,
+    mood_spec: MoodSpec,
+) -> tk.PhotoImage:
+    """Bake one frosted pill image at fractional enable step ``step_idx / steps``."""
+    step_count = max(1, int(steps))
+    t = _clamp(step_idx / float(step_count), 0.0, 1.0)
+    fill_rgba = _lerp_rgba(mood_spec.disabled_fill_rgba, mood_spec.pill_fill_rgba, t)
+    edge_rgba = _lerp_rgba(mood_spec.disabled_edge_rgba, mood_spec.pill_edge_rgba, t)
+    icon_tint = _lerp_rgb(mood_spec.icon_disabled_rgb, mood_spec.icon_enabled_rgb, t)
+    icon_alpha = _lerp(0.65, 1.0, t)
+    return _bake_pill_photo_from_geometry(
+        pill_w,
+        height,
+        rows_geom,
+        content_left_px,
+        item_positions,
+        fill_rgba,
+        edge_rgba,
+        icon_alpha,
+        master,
+        icon_tint_rgb=icon_tint,
+    )
+
+
 def _bake_transition_pills(
     pill_w: int,
     height: int,
@@ -4626,28 +4685,20 @@ def _bake_transition_pills(
     mood_spec = get_mood(mood)
     step_count = max(1, int(steps))
     rows_geom = _compute_pill_geometry(pill_w, height)
-    pills: list[tk.PhotoImage] = []
-    for idx in range(step_count + 1):
-        t = idx / float(step_count)
-        fill_rgba = _lerp_rgba(mood_spec.disabled_fill_rgba, mood_spec.pill_fill_rgba, t)
-        edge_rgba = _lerp_rgba(mood_spec.disabled_edge_rgba, mood_spec.pill_edge_rgba, t)
-        icon_tint = _lerp_rgb(mood_spec.icon_disabled_rgb, mood_spec.icon_enabled_rgb, t)
-        icon_alpha = _lerp(0.65, 1.0, t)
-        pills.append(
-            _bake_pill_photo_from_geometry(
-                pill_w,
-                height,
-                rows_geom,
-                content_left_px,
-                item_positions,
-                fill_rgba,
-                edge_rgba,
-                icon_alpha,
-                master,
-                icon_tint_rgb=icon_tint,
-            )
+    return [
+        _bake_transition_pill_step(
+            pill_w,
+            height,
+            rows_geom,
+            content_left_px,
+            item_positions,
+            master,
+            idx,
+            step_count,
+            mood_spec,
         )
-    return pills
+        for idx in range(step_count + 1)
+    ]
 
 
 def build_hud_transition_pills(
@@ -4825,21 +4876,21 @@ def resolve_switcher_layout(
         f"C: {state.cultivar_label}",
         f"M: {state.mood_label}",
         "W: Wind On" if state.breeze_enabled else "W: Wind",
-        f"D: {detail_word}",
+        f"T: {detail_word}",
     )
     short_labels = (
         f"C: {state.cultivar_short}",
         f"M: {state.mood_short}",
         "W: On" if state.breeze_enabled else "W: Off",
-        f"D: {detail_word}",
+        f"T: {detail_word}",
     )
     compact_hotkey_labels = (
         "C",
         "M",
         "W:On" if state.breeze_enabled else "W:Off",
-        "D:Lush" if state.detail_lush else "D:Standard",
+        "T:Lush" if state.detail_lush else "T:Standard",
     )
-    tiny_hotkey_labels = ("C", "M", "W", "D")
+    tiny_hotkey_labels = ("C", "M", "W", "T")
 
     tier_specs: tuple[tuple[int, Sequence[str], int, int, int], ...] = (
         (0, full_labels, 12, 4, 7),
@@ -5579,12 +5630,1185 @@ def build_fps_badge_photo(
     return (badge_photo, canvas_text_x + 1.0)
 
 
+def format_faces_text(face_count: int) -> str:
+    """Format polygon face count for the top-left mesh Faces badge."""
+    count = max(0, int(face_count))
+    noun = "Face" if count == 1 else "Faces"
+    return f"{count:,} {noun}"
+
+
+def build_faces_badge_photo(
+    face_count: int,
+    font: tkfont.Font | None = None,
+    *,
+    height: int = FACES_BADGE_HEIGHT,
+    master: tk.Misc | None = None,
+    mood: MoodSpec | str = DEFAULT_MOOD,
+) -> tuple[tk.PhotoImage, float, int]:
+    """Build a mood-aware frosted mesh face-count badge ``PhotoImage``."""
+    mood_spec = get_mood(mood)
+    if font is None:
+        family, size, weight = get_hud_font(size=9, weight="medium")
+        font = tkfont.Font(root=master or tk._default_root, family=family, size=size, weight=weight)
+
+    text = format_faces_text(face_count)
+    icon_w, icon_h, _ = _load_rgba_icon("auto_awesome")
+    pad_x = 11
+    icon_gap = 5
+    text_w = int(font.measure(text))
+    badge_w = pad_x + icon_w + icon_gap + text_w + pad_x
+
+    rows = build_pill_rows(
+        badge_w,
+        height,
+        mood=mood_spec,
+        enabled=True,
+        fill_rgba=mood_spec.pill_fill_rgba,
+        edge_rgba=mood_spec.pill_edge_rgba,
+    )
+    _composite_icon_over_rows(
+        rows,
+        badge_w,
+        height,
+        "auto_awesome",
+        dest_x=pad_x,
+        dest_y=(height - icon_h) // 2,
+        tint_rgb=mood_spec.icon_enabled_rgb,
+    )
+    png_bytes = _encode_rgba_rows_png(badge_w, height, rows)
+    photo_kwargs: dict[str, object] = {"data": png_bytes, "format": "png"}
+    if master is not None:
+        photo_kwargs["master"] = master
+    badge_photo = tk.PhotoImage(**photo_kwargs)
+
+    canvas_text_x = (pad_x + icon_w + icon_gap) - badge_w * 0.5
+    return (badge_photo, canvas_text_x + 1.0, badge_w)
+
+
 def hud_ink_hex(blend: float, mood: MoodSpec | str = DEFAULT_MOOD) -> str:
     """Return the interpolated HUD ink hex color between disabled (0) and enabled (1)."""
     mood_spec = get_mood(mood)
     t = _clamp(blend, 0.0, 1.0)
     r, g, b = _lerp_rgb(mood_spec.ink_disabled_rgb, mood_spec.ink_enabled_rgb, t)
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+# -- Top-Left BGM Audio Engine & Pill Layout ---------------------------------
+
+@dataclass(frozen=True, slots=True)
+class BgmTrack:
+    """Validated local background audio asset metadata."""
+
+    path: Path
+    title: str
+    duration_sec: float = 0.0
+
+
+def _probe_m4a_duration(path: Path) -> float:
+    """Read track duration in seconds from an MP4/M4A ``mvhd`` atom."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            head = fh.read(min(size, 131072))
+            chunks = [head]
+            if size > 131072:
+                fh.seek(max(0, size - 131072))
+                chunks.append(fh.read(131072))
+        for buf in chunks:
+            idx = buf.find(b"mvhd")
+            if idx >= 4 and idx + 28 <= len(buf):
+                version = buf[idx + 4]
+                if version == 0:
+                    timescale, duration = struct.unpack(">II", buf[idx + 16 : idx + 24])
+                    if timescale > 0:
+                        return float(duration) / float(timescale)
+                elif version == 1 and idx + 36 <= len(buf):
+                    timescale, duration = struct.unpack(">IQ", buf[idx + 24 : idx + 36])
+                    if timescale > 0:
+                        return float(duration) / float(timescale)
+    except OSError:
+        pass
+    return 0.0
+
+
+def _find_mp4_edts_tag_offsets(path: Path) -> list[int]:
+    """Locate ``edts`` FourCC offsets inside ``moov/trak`` boxes of an MP4/M4A file."""
+    offsets: list[int] = []
+    try:
+        file_size = path.stat().st_size
+        with path.open("rb") as fh:
+            pos = 0
+            while pos + 8 <= file_size:
+                fh.seek(pos)
+                hdr = fh.read(8)
+                if len(hdr) < 8:
+                    break
+                sz, tag = struct.unpack(">I4s", hdr)
+                hdr_len = 8
+                if sz == 1:
+                    ext = fh.read(8)
+                    if len(ext) < 8:
+                        break
+                    sz = struct.unpack(">Q", ext)[0]
+                    hdr_len = 16
+                elif sz == 0:
+                    sz = file_size - pos
+                if sz < hdr_len or pos + sz > file_size:
+                    break
+                if tag == b"moov":
+                    moov_data = fh.read(sz - hdr_len)
+                    moov_base = pos + hdr_len
+                    m_pos = 0
+                    while m_pos + 8 <= len(moov_data):
+                        t_sz, t_tag = struct.unpack(">I4s", moov_data[m_pos : m_pos + 8])
+                        if t_sz < 8 or m_pos + t_sz > len(moov_data):
+                            break
+                        if t_tag == b"trak":
+                            c_pos = m_pos + 8
+                            c_end = m_pos + t_sz
+                            while c_pos + 8 <= c_end:
+                                c_sz, c_tag = struct.unpack(">I4s", moov_data[c_pos : c_pos + 8])
+                                if c_sz < 8 or c_pos + c_sz > c_end:
+                                    break
+                                if c_tag == b"edts":
+                                    offsets.append(moov_base + c_pos + 4)
+                                c_pos += c_sz
+                        m_pos += t_sz
+                    break
+                pos += sz
+    except OSError:
+        return []
+    return offsets
+
+
+def _probe_wav_duration(path: Path) -> float:
+    """Read track duration in seconds from a RIFF/WAVE header."""
+    try:
+        with path.open("rb") as fh:
+            hdr = fh.read(65536)
+        if len(hdr) < 44 or hdr[:4] != b"RIFF" or hdr[8:12] != b"WAVE":
+            return 0.0
+        pos = 12
+        byte_rate = 0
+        data_bytes = 0
+        while pos + 8 <= len(hdr):
+            chunk_id = hdr[pos : pos + 4]
+            chunk_size = struct.unpack("<I", hdr[pos + 4 : pos + 8])[0]
+            pos += 8
+            if chunk_id == b"fmt " and pos + 16 <= len(hdr):
+                byte_rate = struct.unpack("<I", hdr[pos + 8 : pos + 12])[0]
+            elif chunk_id == b"data":
+                data_bytes = chunk_size
+                break
+            pos += chunk_size + (chunk_size & 1)
+        if byte_rate > 0 and data_bytes > 0:
+            return float(data_bytes) / float(byte_rate)
+    except OSError:
+        pass
+    return 0.0
+
+
+def _probe_audio_duration(path: Path) -> float:
+    """Return best-effort duration in seconds for a local audio track."""
+    suffix = path.suffix.lower()
+    if suffix in (".m4a", ".mp4", ".aac"):
+        return _probe_m4a_duration(path)
+    if suffix == ".wav":
+        return _probe_wav_duration(path)
+    return 0.0
+
+
+def discover_bgm_tracks() -> tuple[BgmTrack, ...]:
+    """Scan ``assets/audios`` for validated ``.m4a`` tracks sorted by filename."""
+    try:
+        if not _AUDIOS_DIR.exists() or _AUDIOS_DIR.is_symlink() or not _AUDIOS_DIR.is_dir():
+            return ()
+        entries = sorted(_AUDIOS_DIR.iterdir(), key=lambda p: p.name.casefold())
+    except OSError:
+        return ()
+
+    tracks: list[BgmTrack] = []
+    for entry in entries:
+        if entry.name.startswith(".") or entry.suffix.lower() not in _AUDIO_EXTENSIONS:
+            continue
+        validated = _validate_asset_path(entry, _MAX_AUDIO_BYTES)
+        if validated is None or validated.stat().st_size <= 0:
+            continue
+        tracks.append(
+            BgmTrack(
+                path=validated,
+                title=entry.stem,
+                duration_sec=_probe_audio_duration(validated),
+            )
+        )
+    return tuple(tracks)
+
+
+def _format_mmss(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, rem = divmod(total, 3600)
+    mins, secs = divmod(rem, 60)
+    if hours > 0:
+        return f"{hours}:{mins:02d}:{secs:02d}"
+    return f"{mins}:{secs:02d}"
+
+
+def format_bgm_time(
+    elapsed_sec: float, duration_sec: float, *, compact: bool = False
+) -> str:
+    """Format playback elapsed time and total track length (``m:ss / m:ss``)."""
+    cur = _format_mmss(elapsed_sec)
+    if compact or duration_sec <= 0.5:
+        return cur
+    return f"{cur} / {_format_mmss(duration_sec)}"
+
+
+def _bgm_time_template(duration_sec: float, *, compact: bool = False) -> str:
+    """Return wide-digit placeholder string for non-jittering time box sizing."""
+    total_str = _format_mmss(max(0.0, duration_sec))
+    wide_digits = "".join("8" if ch.isdigit() else ch for ch in total_str)
+    if compact or duration_sec <= 0.5:
+        return wide_digits
+    return f"{wide_digits} / {wide_digits}"
+
+
+_BGM_EFF_SR = BGM_SAMPLE_RATE / 4.0
+_BGM_BAND_TAPS: tuple[tuple[float, ...], ...] = (
+    tuple(2.0 * math.cos(2.0 * math.pi * f / _BGM_EFF_SR) for f in (98.0, 146.8)),
+    tuple(2.0 * math.cos(2.0 * math.pi * f / _BGM_EFF_SR) for f in (220.0, 329.6)),
+    tuple(2.0 * math.cos(2.0 * math.pi * f / _BGM_EFF_SR) for f in (523.3, 784.0)),
+    tuple(2.0 * math.cos(2.0 * math.pi * f / _BGM_EFF_SR) for f in (1174.7, 1760.0)),
+)
+_BGM_BAND_GAINS: tuple[float, float, float, float] = (14.0, 12.0, 20.0, 28.0)
+
+
+def _compute_pcm_4bands(pcm_bytes: bytes) -> tuple[float, float, float, float]:
+    """Compute 4 normalized musical frequency-band levels from 44.1 kHz stereo PCM."""
+    if len(pcm_bytes) < 128:
+        return (0.0, 0.0, 0.0, 0.0)
+
+    samples_arr = array.array("h")
+    usable = len(pcm_bytes) - (len(pcm_bytes) & 3)
+    samples_arr.frombytes(pcm_bytes[:usable])
+    if sys.byteorder != "little":
+        samples_arr.byteswap()
+
+    limit = min(len(samples_arr), 2048)
+    mono = [
+        (samples_arr[i] + samples_arr[i + 1]) * (1.0 / 65536.0)
+        for i in range(0, limit - 1, 8)
+    ]
+    n = len(mono)
+    if n < 16:
+        return (0.0, 0.0, 0.0, 0.0)
+
+    rms = math.sqrt(sum(s * s for s in mono) / float(n))
+    if rms < 1e-4:
+        return (0.0, 0.0, 0.0, 0.0)
+
+    levels: list[float] = []
+    inv_n = 1.0 / float(n)
+    denom = math.log1p(12.0)
+    for coeffs, gain in zip(_BGM_BAND_TAPS, _BGM_BAND_GAINS):
+        band_peak = 0.0
+        for c in coeffs:
+            q1 = 0.0
+            q2 = 0.0
+            for s in mono:
+                q0 = c * q1 - q2 + s
+                q2 = q1
+                q1 = q0
+            power = q1 * q1 + q2 * q2 - c * q1 * q2
+            mag = math.sqrt(max(0.0, power)) * inv_n
+            if mag > band_peak:
+                band_peak = mag
+        blended = band_peak * gain + rms * 1.4
+        levels.append(_clamp(math.log1p(blended * 24.0) / denom, 0.0, 1.0))
+    return (levels[0], levels[1], levels[2], levels[3])
+
+
+class BgmPlayer:
+    """Zero-dependency streaming background audio player (Windows MF + waveOut)."""
+
+    def __init__(self, *, auto_play: bool = True) -> None:
+        self._tracks: tuple[BgmTrack, ...] = discover_bgm_tracks()
+        self._track_idx: int = 0
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
+        self._wave_event_handle: int = 0
+
+        has_tracks = len(self._tracks) > 0
+        self._want_playing: bool = bool(auto_play and has_tracks and sys.platform == "win32")
+        self._is_playing: bool = self._want_playing
+        self._elapsed_sec: float = 0.0
+        self._duration_sec: float = self._tracks[0].duration_sec if has_tracks else 0.0
+        self._spectrum: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+        self._pending_delta: int = 0
+        self._worker: threading.Thread | None = None
+
+        if has_tracks and sys.platform == "win32":
+            self._worker = threading.Thread(
+                target=self._run_windows_audio_loop,
+                name="FlowerBgmAudio",
+                daemon=True,
+            )
+            self._worker.start()
+
+    @property
+    def current_track(self) -> BgmTrack | None:
+        if not self._tracks:
+            return None
+        with self._lock:
+            idx = self._track_idx
+        return self._tracks[idx]
+
+    @property
+    def is_playing(self) -> bool:
+        with self._lock:
+            return self._is_playing
+
+    def snapshot(self) -> tuple[bool, float, float, tuple[float, float, float, float]]:
+        """Return ``(is_playing, elapsed_sec, duration_sec, 4_band_levels)``."""
+        with self._lock:
+            return (
+                self._is_playing,
+                self._elapsed_sec,
+                self._duration_sec,
+                self._spectrum,
+            )
+
+    def _signal_worker(self) -> None:
+        self._wake_event.set()
+        ev_handle = self._wave_event_handle
+        if ev_handle and sys.platform == "win32":
+            try:
+                import ctypes
+
+                ctypes.windll.kernel32.SetEvent(ctypes.c_void_p(ev_handle))
+            except Exception:
+                pass
+
+    def toggle(self) -> bool:
+        """Toggle playback between playing and paused; return new playing state."""
+        if not self._tracks or sys.platform != "win32":
+            return False
+        with self._lock:
+            self._want_playing = not self._want_playing
+            self._is_playing = self._want_playing
+            if not self._want_playing:
+                self._spectrum = (0.0, 0.0, 0.0, 0.0)
+            playing_now = self._want_playing
+        self._signal_worker()
+        return playing_now
+
+    def previous(self) -> None:
+        """Skip to the previous track in the playlist (wraps around)."""
+        if not self._tracks or sys.platform != "win32":
+            return
+        with self._lock:
+            self._pending_delta -= 1
+        self._signal_worker()
+
+    def next(self) -> None:
+        """Skip to the next track in the playlist (wraps around)."""
+        if not self._tracks or sys.platform != "win32":
+            return
+        with self._lock:
+            self._pending_delta += 1
+        self._signal_worker()
+
+    def close(self) -> None:
+        """Stop playback and release audio device and Media Foundation handles."""
+        self._stop_event.set()
+        with self._lock:
+            self._want_playing = False
+            self._is_playing = False
+            self._spectrum = (0.0, 0.0, 0.0, 0.0)
+        self._signal_worker()
+        if self._worker is not None and self._worker.is_alive():
+            self._worker.join(timeout=0.75)
+        self._worker = None
+
+    def _run_windows_audio_loop(self) -> None:
+        track = self.current_track
+        if track is None:
+            return
+
+        import ctypes
+        import ctypes.wintypes as wt
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", ctypes.c_uint32),
+                ("Data2", ctypes.c_uint16),
+                ("Data3", ctypes.c_uint16),
+                ("Data4", ctypes.c_uint8 * 8),
+            ]
+
+        def make_guid(d1: int, d2: int, d3: int, *b: int) -> GUID:
+            return GUID(d1, d2, d3, (ctypes.c_uint8 * 8)(*b))
+
+        is_64 = ctypes.sizeof(ctypes.c_void_p) == 8
+
+        class PROPVARIANT(ctypes.Structure):
+            _fields_ = (
+                [
+                    ("vt", ctypes.c_uint16),
+                    ("wReserved1", ctypes.c_uint16),
+                    ("wReserved2", ctypes.c_uint16),
+                    ("wReserved3", ctypes.c_uint16),
+                    ("val", ctypes.c_int64),
+                    ("pad", ctypes.c_uint64),
+                ]
+                if is_64
+                else [
+                    ("vt", ctypes.c_uint16),
+                    ("wReserved1", ctypes.c_uint16),
+                    ("wReserved2", ctypes.c_uint16),
+                    ("wReserved3", ctypes.c_uint16),
+                    ("val", ctypes.c_int64),
+                ]
+            )
+
+        class WAVEFORMATEX(ctypes.Structure):
+            _pack_ = 1
+            _fields_ = [
+                ("wFormatTag", ctypes.c_uint16),
+                ("nChannels", ctypes.c_uint16),
+                ("nSamplesPerSec", ctypes.c_uint32),
+                ("nAvgBytesPerSec", ctypes.c_uint32),
+                ("nBlockAlign", ctypes.c_uint16),
+                ("wBitsPerSample", ctypes.c_uint16),
+                ("cbSize", ctypes.c_uint16),
+            ]
+
+        class WAVEHDR(ctypes.Structure):
+            _fields_ = [
+                ("lpData", ctypes.c_void_p),
+                ("dwBufferLength", ctypes.c_uint32),
+                ("dwBytesRecorded", ctypes.c_uint32),
+                ("dwUser", ctypes.c_size_t),
+                ("dwFlags", ctypes.c_uint32),
+                ("dwLoops", ctypes.c_uint32),
+                ("lpNext", ctypes.c_void_p),
+                ("reserved", ctypes.c_size_t),
+            ]
+
+        class MMTIME(ctypes.Structure):
+            _pack_ = 1
+
+            class _U(ctypes.Union):
+                _pack_ = 1
+                _fields_ = [
+                    ("ms", ctypes.c_uint32),
+                    ("sample", ctypes.c_uint32),
+                    ("cb", ctypes.c_uint32),
+                    ("ticks", ctypes.c_uint32),
+                    ("smpte_raw", ctypes.c_uint8 * 8),
+                ]
+
+            _fields_ = [("wType", ctypes.c_uint32), ("u", _U)]
+
+        def vcall(ptr: ctypes.c_void_p, index: int, restype: object, *args_spec: tuple[object, object]) -> object:
+            vtbl = ctypes.cast(ptr, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))[0]
+            argtypes = [ctypes.c_void_p] + [a[0] for a in args_spec]
+            args = [ptr] + [a[1] for a in args_spec]
+            fn = ctypes.WINFUNCTYPE(restype, *argtypes)(vtbl[index])  # type: ignore[arg-type]
+            return fn(*args)
+
+        def com_release(ptr: ctypes.c_void_p | None) -> None:
+            if ptr and ptr.value:
+                vcall(ptr, 2, ctypes.c_ulong)
+
+        mf_version = 0x00020070
+        first_audio_stream = 0xFFFFFFFD
+        mf_eof_flag = 2
+        vt_i8 = 20
+        whdr_inqueue = 0x00000010
+        whdr_prepared = 0x00000002
+        time_bytes = 0x0004
+        callback_event = 0x00050000
+        wave_mapper = 0xFFFFFFFF
+        chunk_target_bytes = 8192
+        num_slots = 4
+        bytes_per_sec = float(BGM_SAMPLE_RATE * 4)
+
+        guid_null = make_guid(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        mf_mt_major = make_guid(0x48EBA18E, 0xF8C9, 0x4687, 0xBF, 0x11, 0x0A, 0x74, 0xC9, 0xF9, 0x6A, 0x8F)
+        mf_mt_sub = make_guid(0xF7E34C9A, 0x42E8, 0x4714, 0xB7, 0x4B, 0xCB, 0x29, 0xD7, 0x2C, 0x35, 0xE5)
+        mf_mt_ch = make_guid(0x37E48BF5, 0x645E, 0x4C5B, 0x89, 0xDE, 0xAD, 0xA9, 0xE2, 0x9B, 0x69, 0x6A)
+        mf_mt_sr = make_guid(0x5FAEEAE7, 0x0290, 0x4C31, 0x9E, 0x8A, 0xC5, 0x34, 0xF6, 0x8D, 0x9D, 0xBA)
+        mf_mt_bits = make_guid(0xF2DEB57F, 0x40FA, 0x4764, 0xAA, 0x33, 0xED, 0x4F, 0x2D, 0x1F, 0xF6, 0x69)
+        mf_audio = make_guid(0x73647561, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71)
+        mf_pcm = make_guid(0x00000001, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71)
+
+        ole32 = mfplat = mfreadwrite = winmm = kernel32 = None
+        com_ok = False
+        mf_ok = False
+        reader: ctypes.c_void_p | None = None
+        hwo: wt.HANDLE | None = None
+        h_event: wt.HANDLE | None = None
+        slots: list[tuple[WAVEHDR, object] | None] = [None] * num_slots
+
+        try:
+            ole32 = ctypes.WinDLL("ole32")
+            mfplat = ctypes.WinDLL("mfplat")
+            mfreadwrite = ctypes.WinDLL("mfreadwrite")
+            winmm = ctypes.WinDLL("winmm")
+            kernel32 = ctypes.WinDLL("kernel32")
+            shlwapi = ctypes.WinDLL("shlwapi")
+
+            shlwapi.SHCreateMemStream.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            shlwapi.SHCreateMemStream.restype = ctypes.c_void_p
+            mfplat.MFCreateMFByteStreamOnStream.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
+            mfplat.MFCreateMFByteStreamOnStream.restype = ctypes.c_long
+            mfreadwrite.MFCreateSourceReaderFromURL.argtypes = [
+                wt.LPCWSTR,
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
+            mfreadwrite.MFCreateSourceReaderFromURL.restype = ctypes.c_long
+            mfreadwrite.MFCreateSourceReaderFromByteStream.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
+            mfreadwrite.MFCreateSourceReaderFromByteStream.restype = ctypes.c_long
+            mfplat.MFCreateMediaType.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+            mfplat.MFCreateMediaType.restype = ctypes.c_long
+
+            kernel32.CreateEventW.argtypes = [ctypes.c_void_p, wt.BOOL, wt.BOOL, wt.LPCWSTR]
+            kernel32.CreateEventW.restype = wt.HANDLE
+            kernel32.WaitForSingleObject.argtypes = [wt.HANDLE, wt.DWORD]
+            kernel32.WaitForSingleObject.restype = wt.DWORD
+            kernel32.CloseHandle.argtypes = [wt.HANDLE]
+            kernel32.CloseHandle.restype = wt.BOOL
+
+            winmm.waveOutOpen.argtypes = [
+                ctypes.POINTER(wt.HANDLE),
+                wt.UINT,
+                ctypes.POINTER(WAVEFORMATEX),
+                ctypes.c_size_t,
+                ctypes.c_size_t,
+                wt.DWORD,
+            ]
+            winmm.waveOutOpen.restype = wt.UINT
+            winmm.waveOutPrepareHeader.argtypes = [wt.HANDLE, ctypes.POINTER(WAVEHDR), wt.UINT]
+            winmm.waveOutUnprepareHeader.argtypes = [wt.HANDLE, ctypes.POINTER(WAVEHDR), wt.UINT]
+            winmm.waveOutWrite.argtypes = [wt.HANDLE, ctypes.POINTER(WAVEHDR), wt.UINT]
+            winmm.waveOutPause.argtypes = [wt.HANDLE]
+            winmm.waveOutRestart.argtypes = [wt.HANDLE]
+            winmm.waveOutReset.argtypes = [wt.HANDLE]
+            winmm.waveOutClose.argtypes = [wt.HANDLE]
+            winmm.waveOutGetPosition.argtypes = [wt.HANDLE, ctypes.POINTER(MMTIME), wt.UINT]
+
+            hr_co = int(ole32.CoInitializeEx(None, 0))
+            com_ok = hr_co in (0, 1)
+            if int(mfplat.MFStartup(mf_version, 0)) != 0:
+                raise RuntimeError("MFStartup failed")
+            mf_ok = True
+
+            def open_track_reader(track_path: Path) -> ctypes.c_void_p:
+                new_reader = ctypes.c_void_p()
+                edts_offsets = _find_mp4_edts_tag_offsets(track_path)
+                if edts_offsets:
+                    # Windows MF's DASH MP4 source can emit instant EOF when an edts box is present.
+                    patched = bytearray(track_path.read_bytes())
+                    for tag_off in edts_offsets:
+                        patched[tag_off : tag_off + 4] = b"free"
+                    raw_arr = (ctypes.c_uint8 * len(patched)).from_buffer(patched)
+                    istream = ctypes.c_void_p(shlwapi.SHCreateMemStream(raw_arr, len(patched)))
+                    if not istream.value:
+                        raise RuntimeError(f"SHCreateMemStream failed: {track_path}")
+                    bytestream = ctypes.c_void_p()
+                    try:
+                        if mfplat.MFCreateMFByteStreamOnStream(istream, ctypes.byref(bytestream)) != 0:
+                            raise RuntimeError(f"MFCreateMFByteStreamOnStream failed: {track_path}")
+                        if mfreadwrite.MFCreateSourceReaderFromByteStream(bytestream, None, ctypes.byref(new_reader)) != 0:
+                            raise RuntimeError(f"MFCreateSourceReaderFromByteStream failed: {track_path}")
+                    finally:
+                        com_release(bytestream)
+                        com_release(istream)
+                elif mfreadwrite.MFCreateSourceReaderFromURL(str(track_path), None, ctypes.byref(new_reader)) != 0:
+                    raise RuntimeError(f"MFCreateSourceReaderFromURL failed: {track_path}")
+
+                mtype = ctypes.c_void_p()
+                if mfplat.MFCreateMediaType(ctypes.byref(mtype)) != 0:
+                    com_release(new_reader)
+                    raise RuntimeError("MFCreateMediaType failed")
+                try:
+                    vcall(mtype, 24, ctypes.c_long, (ctypes.POINTER(GUID), ctypes.byref(mf_mt_major)), (ctypes.POINTER(GUID), ctypes.byref(mf_audio)))
+                    vcall(mtype, 24, ctypes.c_long, (ctypes.POINTER(GUID), ctypes.byref(mf_mt_sub)), (ctypes.POINTER(GUID), ctypes.byref(mf_pcm)))
+                    vcall(mtype, 21, ctypes.c_long, (ctypes.POINTER(GUID), ctypes.byref(mf_mt_bits)), (ctypes.c_uint32, 16))
+                    vcall(mtype, 21, ctypes.c_long, (ctypes.POINTER(GUID), ctypes.byref(mf_mt_ch)), (ctypes.c_uint32, 2))
+                    vcall(mtype, 21, ctypes.c_long, (ctypes.POINTER(GUID), ctypes.byref(mf_mt_sr)), (ctypes.c_uint32, BGM_SAMPLE_RATE))
+                    if int(vcall(new_reader, 7, ctypes.c_long, (ctypes.c_uint32, first_audio_stream), (ctypes.c_void_p, None), (ctypes.c_void_p, mtype))) != 0:  # type: ignore[arg-type]
+                        raise RuntimeError("SetCurrentMediaType failed")
+                except Exception:
+                    com_release(new_reader)
+                    raise
+                finally:
+                    com_release(mtype)
+                return new_reader
+
+            reader = open_track_reader(track.path)
+
+            ev_handle = kernel32.CreateEventW(None, False, False, None)
+            if not ev_handle:
+                raise RuntimeError("CreateEventW failed")
+            h_event = ev_handle
+            self._wave_event_handle = int(ev_handle)
+
+            wfx = WAVEFORMATEX(1, 2, BGM_SAMPLE_RATE, BGM_SAMPLE_RATE * 4, 4, 16, 0)
+            wave_handle = wt.HANDLE()
+            if winmm.waveOutOpen(ctypes.byref(wave_handle), wave_mapper, ctypes.byref(wfx), int(ev_handle), 0, callback_event) != 0:
+                raise RuntimeError("waveOutOpen failed")
+            hwo = wave_handle
+
+            def read_next_pcm_chunk() -> tuple[bytes, bool]:
+                buf_parts: list[bytes] = []
+                acc_len = 0
+                ended = False
+                while acc_len < chunk_target_bytes and not self._stop_event.is_set():
+                    a_idx = ctypes.c_uint32()
+                    flags = ctypes.c_uint32()
+                    ts = ctypes.c_int64()
+                    sample = ctypes.c_void_p()
+                    hr_read = int(
+                        vcall(  # type: ignore[arg-type]
+                            reader,
+                            9,
+                            ctypes.c_long,
+                            (ctypes.c_uint32, first_audio_stream),
+                            (ctypes.c_uint32, 0),
+                            (ctypes.POINTER(ctypes.c_uint32), ctypes.byref(a_idx)),
+                            (ctypes.POINTER(ctypes.c_uint32), ctypes.byref(flags)),
+                            (ctypes.POINTER(ctypes.c_int64), ctypes.byref(ts)),
+                            (ctypes.POINTER(ctypes.c_void_p), ctypes.byref(sample)),
+                        )
+                    )
+                    if sample and sample.value:
+                        try:
+                            mbuf = ctypes.c_void_p()
+                            if int(vcall(sample, 41, ctypes.c_long, (ctypes.POINTER(ctypes.c_void_p), ctypes.byref(mbuf)))) == 0 and mbuf.value:  # type: ignore[arg-type]
+                                try:
+                                    pdata = ctypes.POINTER(ctypes.c_uint8)()
+                                    max_l = ctypes.c_uint32()
+                                    cur_l = ctypes.c_uint32()
+                                    if int(vcall(mbuf, 3, ctypes.c_long, (ctypes.POINTER(ctypes.POINTER(ctypes.c_uint8)), ctypes.byref(pdata)), (ctypes.POINTER(ctypes.c_uint32), ctypes.byref(max_l)), (ctypes.POINTER(ctypes.c_uint32), ctypes.byref(cur_l)))) == 0:  # type: ignore[arg-type]
+                                        if cur_l.value > 0:
+                                            raw = ctypes.string_at(pdata, cur_l.value)
+                                            buf_parts.append(raw)
+                                            acc_len += len(raw)
+                                        vcall(mbuf, 4, ctypes.c_long)
+                                finally:
+                                    com_release(mbuf)
+                        finally:
+                            com_release(sample)
+
+                    if hr_read != 0 or (flags.value & mf_eof_flag):
+                        ended = True
+                        break
+                return (b"".join(buf_parts), ended)
+
+            hw_paused = False
+            total_written = 0
+            last_cb = 0
+            cb_wrap_offset = 0
+            decode_idx = 0
+            decode_durations = [t.duration_sec for t in self._tracks]
+            seg_start_bytes = 0
+            track_segments: deque[tuple[int, int, float]] = deque(
+                [(0, 0, decode_durations[0])]
+            )
+            inflight: deque[tuple[int, int, tuple[float, float, float, float]]] = deque()
+            mm = MMTIME()
+
+            while not self._stop_event.is_set():
+                with self._lock:
+                    want_play = self._want_playing
+                    skip_delta = self._pending_delta
+                    self._pending_delta = 0
+                    cur_active_idx = self._track_idx
+
+                if skip_delta != 0:
+                    num_tracks = len(self._tracks)
+                    target_idx = (cur_active_idx + skip_delta) % num_tracks
+                    winmm.waveOutReset(hwo)
+                    for slot_idx in range(num_slots):
+                        slot = slots[slot_idx]
+                        if slot is not None:
+                            hdr, _cb_ref = slot
+                            if hdr.dwFlags & whdr_prepared:
+                                winmm.waveOutUnprepareHeader(
+                                    hwo, ctypes.byref(hdr), ctypes.sizeof(WAVEHDR)
+                                )
+                            slots[slot_idx] = None
+                    hw_paused = False
+                    if target_idx == decode_idx:
+                        pv_zero = PROPVARIANT(vt=vt_i8, val=0)
+                        vcall(
+                            reader,
+                            8,
+                            ctypes.c_long,
+                            (ctypes.POINTER(GUID), ctypes.byref(guid_null)),
+                            (ctypes.POINTER(PROPVARIANT), ctypes.byref(pv_zero)),
+                        )
+                    else:
+                        try:
+                            next_reader = open_track_reader(self._tracks[target_idx].path)
+                            com_release(reader)
+                            reader = next_reader
+                            decode_idx = target_idx
+                        except Exception:
+                            pv_zero = PROPVARIANT(vt=vt_i8, val=0)
+                            vcall(
+                                reader,
+                                8,
+                                ctypes.c_long,
+                                (ctypes.POINTER(GUID), ctypes.byref(guid_null)),
+                                (ctypes.POINTER(PROPVARIANT), ctypes.byref(pv_zero)),
+                            )
+                            target_idx = decode_idx
+                    total_written = 0
+                    last_cb = 0
+                    cb_wrap_offset = 0
+                    seg_start_bytes = 0
+                    inflight.clear()
+                    track_segments.clear()
+                    track_segments.append((0, target_idx, decode_durations[target_idx]))
+                    with self._lock:
+                        self._track_idx = target_idx
+                        self._duration_sec = decode_durations[target_idx]
+                        self._elapsed_sec = 0.0
+                        self._spectrum = (0.0, 0.0, 0.0, 0.0)
+
+                if not want_play:
+                    if total_written > 0 and not hw_paused:
+                        winmm.waveOutPause(hwo)
+                        hw_paused = True
+                    self._wake_event.clear()
+                    self._wake_event.wait(timeout=0.05)
+                    continue
+
+                if hw_paused:
+                    winmm.waveOutRestart(hwo)
+                    hw_paused = False
+
+                queued_any = False
+                for slot_idx in range(num_slots):
+                    slot = slots[slot_idx]
+                    if slot is not None:
+                        hdr, _cb_ref = slot
+                        if hdr.dwFlags & whdr_inqueue:
+                            continue
+                        if hdr.dwFlags & whdr_prepared:
+                            winmm.waveOutUnprepareHeader(hwo, ctypes.byref(hdr), ctypes.sizeof(WAVEHDR))
+                        slots[slot_idx] = None
+
+                    pcm_chunk, ended = read_next_pcm_chunk()
+                    if self._stop_event.is_set():
+                        break
+                    if pcm_chunk:
+                        cb_buf = ctypes.create_string_buffer(pcm_chunk, len(pcm_chunk))
+                        hdr = WAVEHDR(
+                            lpData=ctypes.addressof(cb_buf),
+                            dwBufferLength=len(pcm_chunk),
+                        )
+                        if winmm.waveOutPrepareHeader(hwo, ctypes.byref(hdr), ctypes.sizeof(WAVEHDR)) == 0:
+                            if winmm.waveOutWrite(hwo, ctypes.byref(hdr), ctypes.sizeof(WAVEHDR)) == 0:
+                                slots[slot_idx] = (hdr, cb_buf)
+                                bands = _compute_pcm_4bands(pcm_chunk)
+                                start_b = total_written
+                                end_b = start_b + len(pcm_chunk)
+                                inflight.append((start_b, end_b, bands))
+                                total_written = end_b
+                                queued_any = True
+                            else:
+                                winmm.waveOutUnprepareHeader(hwo, ctypes.byref(hdr), ctypes.sizeof(WAVEHDR))
+                    if ended:
+                        seg_bytes = total_written - seg_start_bytes
+                        if seg_bytes > 0 and decode_durations[decode_idx] <= 0.0:
+                            decode_durations[decode_idx] = float(seg_bytes) / bytes_per_sec
+                        num_tracks = len(self._tracks)
+                        if num_tracks == 1:
+                            pv_zero = PROPVARIANT(vt=vt_i8, val=0)
+                            vcall(reader, 8, ctypes.c_long, (ctypes.POINTER(GUID), ctypes.byref(guid_null)), (ctypes.POINTER(PROPVARIANT), ctypes.byref(pv_zero)))
+                        else:
+                            switched = False
+                            for offset in range(1, num_tracks + 1):
+                                cand_idx = (decode_idx + offset) % num_tracks
+                                if cand_idx == decode_idx:
+                                    pv_zero = PROPVARIANT(vt=vt_i8, val=0)
+                                    vcall(reader, 8, ctypes.c_long, (ctypes.POINTER(GUID), ctypes.byref(guid_null)), (ctypes.POINTER(PROPVARIANT), ctypes.byref(pv_zero)))
+                                    switched = True
+                                    break
+                                try:
+                                    next_reader = open_track_reader(self._tracks[cand_idx].path)
+                                except Exception:
+                                    continue
+                                com_release(reader)
+                                reader = next_reader
+                                decode_idx = cand_idx
+                                switched = True
+                                break
+                            if not switched:
+                                pv_zero = PROPVARIANT(vt=vt_i8, val=0)
+                                vcall(reader, 8, ctypes.c_long, (ctypes.POINTER(GUID), ctypes.byref(guid_null)), (ctypes.POINTER(PROPVARIANT), ctypes.byref(pv_zero)))
+                        seg_start_bytes = total_written
+                        track_segments.append(
+                            (seg_start_bytes, decode_idx, decode_durations[decode_idx])
+                        )
+
+                mm.wType = time_bytes
+                if winmm.waveOutGetPosition(hwo, ctypes.byref(mm), ctypes.sizeof(MMTIME)) == 0:
+                    cb_val = int(mm.u.cb)
+                    if cb_val < last_cb:
+                        cb_wrap_offset += 0x100000000
+                    last_cb = cb_val
+                    played_bytes = cb_wrap_offset + cb_val
+                    while len(track_segments) > 1 and played_bytes >= track_segments[1][0]:
+                        track_segments.popleft()
+                    seg_start, active_idx, active_dur = track_segments[0]
+                    track_bytes = max(0, played_bytes - seg_start)
+                    elapsed = float(track_bytes) / bytes_per_sec
+                    while len(inflight) > 1 and played_bytes >= inflight[0][1]:
+                        inflight.popleft()
+                    cur_bands = inflight[0][2] if inflight else (0.0, 0.0, 0.0, 0.0)
+                    with self._lock:
+                        if self._want_playing:
+                            self._track_idx = active_idx
+                            self._duration_sec = active_dur
+                            self._elapsed_sec = min(elapsed, active_dur) if active_dur > 0.0 else elapsed
+                            self._spectrum = cur_bands
+
+                if not queued_any:
+                    kernel32.WaitForSingleObject(h_event, 25)
+        except Exception:
+            with self._lock:
+                self._want_playing = False
+                self._is_playing = False
+                self._spectrum = (0.0, 0.0, 0.0, 0.0)
+        finally:
+            self._wave_event_handle = 0
+            if hwo is not None and winmm is not None:
+                try:
+                    winmm.waveOutReset(hwo)
+                    for slot in slots:
+                        if slot is not None:
+                            hdr, _cb_ref = slot
+                            if hdr.dwFlags & whdr_prepared:
+                                winmm.waveOutUnprepareHeader(hwo, ctypes.byref(hdr), ctypes.sizeof(WAVEHDR))
+                    winmm.waveOutClose(hwo)
+                except Exception:
+                    pass
+            if h_event is not None and kernel32 is not None:
+                try:
+                    kernel32.CloseHandle(h_event)
+                except Exception:
+                    pass
+            com_release(reader)
+            if mf_ok and mfplat is not None:
+                try:
+                    mfplat.MFShutdown()
+                except Exception:
+                    pass
+            if com_ok and ole32 is not None:
+                try:
+                    ole32.CoUninitialize()
+                except Exception:
+                    pass
+
+
+BGM_BUTTON_KEYS: tuple[str, ...] = ("play_pause", "prev", "next")
+
+
+@dataclass(frozen=True, slots=True)
+class BgmPillLayout:
+    """Measured layout and button hit geometry for the top-left BGM player pill."""
+
+    pill_width: int
+    pill_height: int
+    compact_time: bool
+    playing: bool
+    title_text: str
+    title_x_offset: float
+    viz_bar_xs: tuple[float, ...]
+    time_x_offset: float
+    time_sample: str
+    item_positions: tuple[tuple[str, int, int, str], ...]
+    local_hit_spans: tuple[tuple[str, str, float, float, str, float], ...]
+    show_labels: bool = False
+    button_segments: tuple[tuple[str, float, str], ...] = ()
+    separators: tuple[tuple[float, str], ...] = ()
+
+    @property
+    def icon_signature(self) -> tuple[tuple[str, int], ...]:
+        return tuple((icon_name, rel_x) for icon_name, rel_x, _rt, _lbl in self.item_positions)
+
+
+def _measure_bgm_pill_tier(
+    title: str,
+    duration_sec: float,
+    playing: bool,
+    title_font: tkfont.Font,
+    time_font: tkfont.Font,
+    *,
+    pad_x: int,
+    elem_gap: int,
+    btn_gap: int,
+    compact_time: bool,
+    show_labels: bool,
+    short_btn_labels: bool,
+    max_width: int | None,
+    height: int,
+    play_slot_w_override: int | None = None,
+) -> BgmPillLayout:
+    play_icon = "pause" if playing else "play"
+    viz_w = (
+        BGM_VIZ_BAR_COUNT * BGM_VIZ_BAR_WIDTH
+        + max(0, BGM_VIZ_BAR_COUNT - 1) * BGM_VIZ_BAR_GAP
+    )
+    time_sample = _bgm_time_template(duration_sec, compact=compact_time)
+    time_w = int(time_font.measure(time_sample))
+
+    sep_text = "·"
+    sep_w = int(title_font.measure(sep_text))
+    icon_label_gap = 4 if pad_x >= 9 else 3
+    sep_gap = 6 if pad_x >= 9 else 4
+
+    if show_labels:
+        play_label = "A: Pause" if playing else "A: Resume"
+        play_slot_w = (
+            max(0, int(play_slot_w_override))
+            if play_slot_w_override is not None
+            else int(title_font.measure(play_label))
+        )
+        prev_label = "S: Prev" if short_btn_labels else "S: Previous"
+        next_label = "D: Next"
+        btn_specs = (
+            ("play_pause", play_icon, play_label, play_slot_w),
+            ("prev", "skip_previous", prev_label, int(title_font.measure(prev_label))),
+            ("next", "skip_next", next_label, int(title_font.measure(next_label))),
+        )
+        ctrl_gap = elem_gap + 3
+        buttons_w = 0
+        for idx, (_bk, iname, _lbl, slot_w) in enumerate(btn_specs):
+            if idx > 0:
+                buttons_w += sep_gap + sep_w + sep_gap
+            iw = _load_rgba_icon(iname)[0]
+            buttons_w += iw + icon_label_gap + slot_w
+        non_title_w = pad_x * 2 + elem_gap * 2 + ctrl_gap + viz_w + time_w + buttons_w
+    else:
+        btn_specs = (
+            ("play_pause", play_icon, "", 0),
+            ("prev", "skip_previous", "", 0),
+            ("next", "skip_next", "", 0),
+        )
+        ctrl_gap = elem_gap
+        icon_w = _load_rgba_icon(play_icon)[0]
+        buttons_w = len(btn_specs) * icon_w + max(0, len(btn_specs) - 1) * btn_gap
+        non_title_w = pad_x * 2 + elem_gap * 3 + viz_w + time_w + buttons_w
+
+    display_title = title
+    if max_width is not None:
+        avail_title = max(32, int(max_width) - non_title_w)
+        display_title = _truncate_label_to_px(title, title_font, avail_title)
+    title_w = int(title_font.measure(display_title))
+
+    title_px = pad_x
+    viz_px = title_px + title_w + elem_gap
+    time_px = viz_px + viz_w + elem_gap
+    btn_start_px = time_px + time_w + ctrl_gap
+    pill_w = btn_start_px + buttons_w + pad_x
+    half_pill = pill_w * 0.5
+
+    viz_xs = tuple(
+        (viz_px + i * (BGM_VIZ_BAR_WIDTH + BGM_VIZ_BAR_GAP) + BGM_VIZ_BAR_WIDTH * 0.5)
+        - half_pill
+        for i in range(BGM_VIZ_BAR_COUNT)
+    )
+
+    btn_positions: list[tuple[str, str, int, int, str]] = []
+    item_positions: list[tuple[str, int, int, str]] = []
+    button_segments: list[tuple[str, float, str]] = []
+    separators: list[tuple[float, str]] = []
+    cursor = btn_start_px
+    for idx, (btn_key, icon_name, label, slot_w) in enumerate(btn_specs):
+        if idx > 0:
+            if show_labels:
+                cursor += sep_gap
+                separators.append(((cursor - half_pill) + 1.0, sep_text))
+                cursor += sep_w + sep_gap
+            else:
+                cursor += btn_gap
+        iw, _ih, _ = _load_rgba_icon(icon_name)
+        rel_icon_px = cursor
+        if show_labels:
+            rel_text_px = rel_icon_px + iw + icon_label_gap
+            end_px = rel_text_px + slot_w
+            button_segments.append((btn_key, (rel_text_px - half_pill) + 1.0, label))
+        else:
+            rel_text_px = rel_icon_px + iw
+            end_px = rel_text_px
+        btn_positions.append((btn_key, icon_name, rel_icon_px, end_px, label))
+        item_positions.append((icon_name, rel_icon_px, rel_text_px, btn_key))
+        cursor = end_px
+
+    local_hits: list[tuple[str, str, float, float, str, float]] = []
+    for idx, (btn_key, icon_name, ix_px, _end_px, _lbl) in enumerate(btn_positions):
+        if idx == 0:
+            xmin_px = float(ix_px) - min(4.0, ctrl_gap * 0.4)
+        else:
+            prev_end = btn_positions[idx - 1][3]
+            xmin_px = (prev_end + ix_px) * 0.5
+        if idx == len(btn_positions) - 1:
+            xmax_px = float(pill_w)
+        else:
+            next_start = btn_positions[idx + 1][2]
+            xmax_px = (btn_positions[idx][3] + next_start) * 0.5
+        local_hits.append(
+            (btn_key, btn_key, xmin_px - half_pill, xmax_px - half_pill, icon_name, ix_px - half_pill)
+        )
+
+    return BgmPillLayout(
+        pill_width=pill_w,
+        pill_height=height,
+        compact_time=compact_time,
+        playing=playing,
+        title_text=display_title,
+        title_x_offset=(title_px - half_pill) + 1.0,
+        viz_bar_xs=viz_xs,
+        time_x_offset=(time_px - half_pill) + 1.0,
+        time_sample=time_sample,
+        item_positions=tuple(item_positions),
+        local_hit_spans=tuple(local_hits),
+        show_labels=show_labels,
+        button_segments=tuple(button_segments),
+        separators=tuple(separators),
+    )
+
+
+def resolve_bgm_pill_layout(
+    title: str,
+    duration_sec: float,
+    playing: bool,
+    title_font: tkfont.Font,
+    time_font: tkfont.Font,
+    *,
+    show_labels: bool = False,
+    max_width: int | None = None,
+    height: int = BGM_HUD_HEIGHT,
+    play_slot_w_override: int | None = None,
+) -> BgmPillLayout:
+    """Measure the top-left BGM pill with responsive title, time, and label sizing."""
+    if show_labels:
+        tier_specs: tuple[tuple[int, int, int, bool, bool], ...] = (
+            (10, 7, 4, False, False),
+            (9, 6, 4, False, True),
+            (8, 5, 3, True, True),
+        )
+    else:
+        tier_specs = (
+            (10, 7, 4, False, False),
+            (9, 6, 4, False, False),
+            (8, 5, 3, True, False),
+        )
+    chosen: BgmPillLayout | None = None
+    for pad_x, elem_gap, btn_gap, compact_time, short_btn_labels in tier_specs:
+        full_probe = _measure_bgm_pill_tier(
+            title,
+            duration_sec,
+            playing,
+            title_font,
+            time_font,
+            pad_x=pad_x,
+            elem_gap=elem_gap,
+            btn_gap=btn_gap,
+            compact_time=compact_time,
+            show_labels=show_labels,
+            short_btn_labels=short_btn_labels,
+            max_width=None,
+            height=height,
+            play_slot_w_override=play_slot_w_override,
+        )
+        if max_width is None or full_probe.pill_width <= max_width:
+            return full_probe
+        capped = _measure_bgm_pill_tier(
+            title,
+            duration_sec,
+            playing,
+            title_font,
+            time_font,
+            pad_x=pad_x,
+            elem_gap=elem_gap,
+            btn_gap=btn_gap,
+            compact_time=compact_time,
+            show_labels=show_labels,
+            short_btn_labels=short_btn_labels,
+            max_width=max_width,
+            height=height,
+            play_slot_w_override=play_slot_w_override,
+        )
+        chosen = capped
+        if not compact_time and capped.pill_width <= max_width and len(capped.title_text) >= 12:
+            return capped
+    assert chosen is not None
+    return chosen
+
+
+def place_bgm_hit_rects(
+    bgm_x: float,
+    bgm_y: float,
+    layout: BgmPillLayout,
+) -> tuple[SegmentHitRect, ...]:
+    """Compute clickable hit rectangles for BGM transport buttons ('play_pause', 'prev', 'next')."""
+    y_min = bgm_y - layout.pill_height * 0.5
+    y_max = bgm_y + layout.pill_height * 0.5
+    return tuple(
+        SegmentHitRect(
+            key=key,
+            label=label,
+            x_min=bgm_x + rel_xmin,
+            x_max=bgm_x + rel_xmax,
+            y_min=y_min,
+            y_max=y_max,
+            text_x=bgm_x + rel_icon_x,
+            icon_name=icon_name,
+            icon_x=bgm_x + rel_icon_x,
+        )
+        for key, label, rel_xmin, rel_xmax, icon_name, rel_icon_x in layout.local_hit_spans
+    )
+
+
+def hit_test_bgm_pill(
+    cx: float, cy: float, hit_rects: Sequence[SegmentHitRect]
+) -> str | None:
+    """Return BGM button key ('play_pause'|'prev'|'next') at canvas (cx, cy), or None."""
+    return _hit_test_rects(cx, cy, hit_rects)
+
+
+def build_tooltip_pill_photo(
+    text: str,
+    font: tkfont.Font,
+    *,
+    height: int = BGM_TOOLTIP_HEIGHT,
+    master: tk.Misc | None = None,
+    mood: MoodSpec | str = DEFAULT_MOOD,
+) -> tuple[tk.PhotoImage, int]:
+    """Build a compact frosted tooltip pill ``PhotoImage`` and return ``(photo, width)``."""
+    pad_x = 9
+    pill_w = max(24, int(font.measure(text)) + pad_x * 2)
+    rows = build_pill_rows(pill_w, height, mood=mood, enabled=True)
+    png_bytes = _encode_rgba_rows_png(pill_w, height, rows)
+    photo_kwargs: dict[str, object] = {"data": png_bytes, "format": "png"}
+    if master is not None:
+        photo_kwargs["master"] = master
+    return (tk.PhotoImage(**photo_kwargs), pill_w)
 
 
 # ---------------------------------------------------------------------------
@@ -6029,6 +7253,7 @@ class FlowerViewerApp:
         self._after_id: str | None = None
         self._resize_after_id: str | None = None
         self._last_viewport: tuple[int, int, float, float, float, float] | None = None
+        self._last_expanded_mode: bool | None = None
         self.fullscreen = False
         self._windowed_geometry: str | None = None
         self._viewport_fov_scale = FOV_SCALE
@@ -6110,6 +7335,23 @@ class FlowerViewerApp:
         self._fps_pen.penup()
         self._fps_pen.hideturtle()
 
+        # Top-left mesh Faces badge state (to the right of FPS badge, cached per mood + faces)
+        self._faces_photo_cache: dict[tuple[str, int], tuple[tk.PhotoImage, float, int]] = {}
+        self._faces_photo: tk.PhotoImage | None = None
+        self._faces_bg_item: int | None = None
+        self._faces_text_item: int | None = None
+        self._faces_x = 0.0
+        self._faces_y = 0.0
+        self._faces_text_x_offset = 0.0
+        self._faces_text_y = 0.0
+        self._faces_applied_count = -1
+        self._faces_applied_mood_key = ""
+        self._faces_applied_ink = ""
+        self._faces_pen = turtle.Turtle(undobuffersize=0, visible=False)
+        self._faces_pen.speed(0)
+        self._faces_pen.penup()
+        self._faces_pen.hideturtle()
+
         # Top-right compact switcher pill state
         self._switcher_pill_cache: dict[
             tuple[str, int, int, tuple[tuple[str, int], ...]], list[tk.PhotoImage]
@@ -6152,6 +7394,51 @@ class FlowerViewerApp:
         self._species_pen.penup()
         self._species_pen.hideturtle()
 
+        # Top-left BGM audio player & pill state (directly below FPS badge)
+        self._bgm_player = BgmPlayer(auto_play=True)
+        track = self._bgm_player.current_track
+        self._bgm_known_duration = track.duration_sec if track is not None else 0.0
+        self._bgm_applied_track_key = str(track.path) if track is not None else ""
+        self._bgm_step_cache: dict[
+            tuple[str, int, int, tuple[tuple[str, int], ...], bool, int], tk.PhotoImage
+        ] = {}
+        self._bgm_layout: BgmPillLayout | None = None
+        self._bgm_hit_rects: tuple[SegmentHitRect, ...] = ()
+        self._bgm_bg_item: int | None = None
+        self._bgm_title_item: int | None = None
+        self._bgm_time_item: int | None = None
+        self._bgm_btn_text_items: dict[str, int] = {}
+        self._bgm_sep_items: list[tuple[float, int]] = []
+        self._bgm_viz_items: list[int] = []
+        self._bgm_viz_levels: list[float] = [BGM_VIZ_MIN_HALF_H] * BGM_VIZ_BAR_COUNT
+        self._bgm_viz_applied_levels: list[float] = [-1.0] * BGM_VIZ_BAR_COUNT
+        self._bgm_label_blend = 0.0 if self._bgm_player.is_playing else 1.0
+        self._bgm_applied_step = -1
+        self._bgm_applied_playing: bool | None = None
+        self._bgm_applied_play_label = ""
+        self._bgm_applied_color = ""
+        self._bgm_applied_viz_color = ""
+        self._bgm_applied_time_text = ""
+        self._bgm_applied_text_signature: (
+            tuple[str, str, bool, tuple[str, ...], int, str, int] | None
+        ) = None
+        self._bgm_applied_geom_signature: (
+            tuple[int, tuple[tuple[str, int], ...], bool, int, str, int] | None
+        ) = None
+        self._bgm_x = 0.0
+        self._bgm_y = 0.0
+        self._bgm_text_y = 0.0
+        self._bgm_max_w: int | None = max(160, WINDOW_WIDTH - int(HUD_MARGIN_X * 2))
+        self._bgm_tooltip_cache: dict[tuple[str, str], tuple[tk.PhotoImage, int]] = {}
+        self._bgm_tooltip_hover_key: str | None = None
+        self._bgm_tooltip_bg_item: int | None = None
+        self._bgm_tooltip_text_item: int | None = None
+        self._bgm_tooltip_applied_state: tuple[str, str, str, float, float] | None = None
+        self._bgm_pen = turtle.Turtle(undobuffersize=0, visible=False)
+        self._bgm_pen.speed(0)
+        self._bgm_pen.penup()
+        self._bgm_pen.hideturtle()
+
         # Dual sliders: Speed & Bloom scrubber
         self._speed_slider = _SliderHUD(
             icon_name="speed",
@@ -6192,7 +7479,10 @@ class FlowerViewerApp:
 
         self._init_hud()
         self._init_fps_badge()
+        self._init_faces_badge()
         self._init_switcher_hud()
+        self._bgm_max_w, self._species_max_w = self._resolve_row2_budgets(WINDOW_WIDTH)
+        self._init_bgm_hud()
         self._init_species_hud()
         self._hud_ready = True
         self._sync_hud_to_viewport()
@@ -6357,6 +7647,101 @@ class FlowerViewerApp:
                 self._canvas.itemconfigure(self._fps_text_item, text=text)
                 self._fps_applied_text = text
 
+    # -- Top-Left Mesh Faces Badge -------------------------------------------
+
+    def _get_faces_badge(
+        self, mood: MoodSpec | str, face_count: int
+    ) -> tuple[tk.PhotoImage, float, int]:
+        mood_spec = get_mood(mood)
+        count = max(0, int(face_count))
+        key = (mood_spec.key, count)
+        cached = self._faces_photo_cache.get(key)
+        if cached is not None:
+            return cached
+        built = build_faces_badge_photo(
+            count,
+            self._fps_font_obj,
+            height=FACES_BADGE_HEIGHT,
+            master=self._root,
+            mood=mood_spec,
+        )
+        self._faces_photo_cache[key] = built
+        return built
+
+    def _reposition_faces_items(self) -> None:
+        if self._faces_bg_item is not None:
+            self._canvas.coords(self._faces_bg_item, self._faces_x, -self._faces_y)
+        if self._faces_text_item is not None:
+            self._canvas.coords(
+                self._faces_text_item,
+                self._faces_x + self._faces_text_x_offset - 1.0,
+                -self._faces_text_y,
+            )
+
+    def _row1_switcher_max_w(self, cw: int) -> int:
+        fps_w = self._fps_photo.width() if self._fps_photo is not None else 79
+        faces_w = self._faces_photo.width() if self._faces_photo is not None else 0
+        left_w = fps_w + (FACES_BADGE_GAP + faces_w if faces_w > 0 else 0.0)
+        return max(
+            120,
+            int(cw - HUD_MARGIN_X - left_w - SWITCHER_MIN_GAP - HUD_MARGIN_X),
+        )
+
+    def _init_faces_badge(self) -> None:
+        face_count = len(self.mesh.faces)
+        self._faces_photo, self._faces_text_x_offset, faces_w = self._get_faces_badge(
+            self.mood, face_count
+        )
+        fps_w = self._fps_photo.width() if self._fps_photo is not None else 79
+        self._faces_x = self._fps_x + fps_w * 0.5 + FACES_BADGE_GAP + faces_w * 0.5
+        self._faces_y = self._fps_y
+        self._faces_text_y = compute_hud_text_y(self._faces_y, self._fps_font_obj)
+
+        self._faces_bg_item = self._tk_canvas.create_image(
+            self._faces_x, -self._faces_y, image=self._faces_photo, anchor="center"
+        )
+        ink = hud_ink_hex(1.0, self.mood)
+        text = format_faces_text(face_count)
+        self._faces_pen.pencolor(ink)
+        self._faces_pen.goto(self._faces_x + self._faces_text_x_offset, self._faces_text_y)
+        self._faces_pen.write(text, move=False, align="left", font=self._fps_font_tuple)
+        self._faces_text_item = self._faces_pen.items[-1]
+        self._faces_applied_count = face_count
+        self._faces_applied_mood_key = self.mood.key
+        self._faces_applied_ink = ink
+
+    def _update_faces_badge(self) -> None:
+        face_count = len(self.mesh.faces)
+        if (
+            face_count == self._faces_applied_count
+            and self.mood.key == self._faces_applied_mood_key
+        ):
+            return
+        old_w = self._faces_photo.width() if self._faces_photo is not None else 0
+        self._faces_photo, self._faces_text_x_offset, faces_w = self._get_faces_badge(
+            self.mood, face_count
+        )
+        if self._faces_bg_item is not None:
+            self._canvas.itemconfigure(self._faces_bg_item, image=self._faces_photo)
+        ink = hud_ink_hex(1.0, self.mood)
+        text = format_faces_text(face_count)
+        if self._faces_text_item is not None:
+            if ink != self._faces_applied_ink:
+                self._canvas.itemconfigure(self._faces_text_item, fill=ink)
+                self._faces_applied_ink = ink
+            self._canvas.itemconfigure(self._faces_text_item, text=text)
+        self._faces_applied_count = face_count
+        self._faces_applied_mood_key = self.mood.key
+
+        fps_w = self._fps_photo.width() if self._fps_photo is not None else 79
+        self._faces_x = self._fps_x + fps_w * 0.5 + FACES_BADGE_GAP + faces_w * 0.5
+        self._faces_y = self._fps_y
+        self._faces_text_y = compute_hud_text_y(self._faces_y, self._fps_font_obj)
+        self._reposition_faces_items()
+        if faces_w != old_w and self._hud_ready:
+            cw = self._last_viewport[0] if self._last_viewport is not None else WINDOW_WIDTH
+            self._switcher_max_w = self._row1_switcher_max_w(cw)
+
     # -- Top-Right Compact Switcher Pill -------------------------------------
 
     def _current_switcher_state(self) -> SwitcherState:
@@ -6389,16 +7774,7 @@ class FlowerViewerApp:
 
     def _init_switcher_hud(self) -> None:
         assert self._fps_photo is not None
-        self._switcher_max_w = max(
-            120,
-            int(
-                WINDOW_WIDTH
-                - HUD_MARGIN_X
-                - self._fps_photo.width()
-                - SWITCHER_MIN_GAP
-                - HUD_MARGIN_X
-            ),
-        )
+        self._switcher_max_w = self._row1_switcher_max_w(WINDOW_WIDTH)
         self._switcher_bg_item = self._tk_canvas.create_image(
             self._switcher_x, -self._switcher_y, anchor="center"
         )
@@ -6606,6 +7982,497 @@ class FlowerViewerApp:
                 self._canvas.itemconfigure(item_id, fill=desired_color)
             self._species_applied_color = desired_color
 
+    # -- Top-Left BGM Player Pill --------------------------------------------
+
+    def _get_bgm_pill_step(
+        self, layout: BgmPillLayout, step_idx: int, *, playing: bool
+    ) -> tk.PhotoImage:
+        step = max(0, min(HUD_TRANSITION_STEPS, int(step_idx)))
+        key = (
+            self.mood.key,
+            layout.pill_width,
+            layout.pill_height,
+            layout.icon_signature,
+            playing,
+            step,
+        )
+        cached = self._bgm_step_cache.get(key)
+        if cached is not None:
+            return cached
+        rows_geom = _compute_pill_geometry(layout.pill_width, layout.pill_height)
+        photo = _bake_transition_pill_step(
+            layout.pill_width,
+            layout.pill_height,
+            rows_geom,
+            0,
+            layout.item_positions,
+            self._root,
+            step,
+            HUD_TRANSITION_STEPS,
+            self.mood,
+        )
+        self._bgm_step_cache[key] = photo
+        return photo
+
+    def _bgm_visualizer_hex(self, is_playing: bool, eased: float) -> str:
+        if is_playing and not self._controls_locked:
+            accent_rgb = self.cultivar.accent_rgba[:3]
+            if self.mood.is_dark:
+                accent_rgb = _lerp_rgb(accent_rgb, (242, 238, 232), 0.30)
+            r, g, b = _lerp_rgb(self.mood.ink_disabled_rgb, accent_rgb, eased)
+            return f"#{r:02x}{g:02x}{b:02x}"
+        return hud_ink_hex(eased, self.mood)
+
+    def _init_bgm_hud(self) -> None:
+        self._bgm_bg_item = self._tk_canvas.create_image(
+            self._bgm_x, -self._bgm_y, anchor="center"
+        )
+        viz_color = self._bgm_visualizer_hex(
+            self._bgm_player.is_playing, _smootherstep(self._hud_enable_blend)
+        )
+        self._bgm_applied_viz_color = viz_color
+        self._bgm_viz_items = [
+            self._tk_canvas.create_line(
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                width=BGM_VIZ_BAR_WIDTH,
+                capstyle="round",
+                fill=viz_color,
+            )
+            for _ in range(BGM_VIZ_BAR_COUNT)
+        ]
+        self._bgm_tooltip_bg_item = self._tk_canvas.create_image(
+            0.0, 0.0, anchor="center", state="hidden"
+        )
+        self._bgm_tooltip_text_item = self._tk_canvas.create_text(
+            0.0,
+            0.0,
+            text="",
+            font=self._hud_font_tuple,
+            fill=hud_ink_hex(1.0, self.mood),
+            anchor="s",
+            state="hidden",
+        )
+        self._update_bgm_visual(force_rebuild=True)
+
+    def _is_expanded_window_mode(self) -> bool:
+        if self.fullscreen:
+            return True
+        try:
+            if str(self._root.state()).lower() == "zoomed":
+                return True
+        except tk.TclError:
+            pass
+        for attr in ("-fullscreen", "-zoomed"):
+            try:
+                if bool(self._root.attributes(attr)):
+                    return True
+            except tk.TclError:
+                pass
+        return False
+
+    def _bgm_tooltip_label(self, key: str) -> str:
+        if key == "play_pause":
+            return "A: Pause" if self._bgm_player.is_playing else "A: Resume"
+        if key == "prev":
+            return "S: Previous"
+        if key == "next":
+            return "D: Next"
+        return ""
+
+    def _update_bgm_tooltip(self) -> None:
+        bg_item = self._bgm_tooltip_bg_item
+        txt_item = self._bgm_tooltip_text_item
+        if bg_item is None or txt_item is None:
+            return
+
+        hover_key = self._bgm_tooltip_hover_key
+        hidden = (
+            hover_key is None
+            or self._controls_locked
+            or self._dragging
+            or self._dragging_speed
+            or self._dragging_bloom
+            or self._is_expanded_window_mode()
+        )
+        target_rect: SegmentHitRect | None = None
+        if not hidden:
+            for rect in self._bgm_hit_rects:
+                if rect.key == hover_key:
+                    target_rect = rect
+                    break
+        if target_rect is None:
+            if self._bgm_tooltip_applied_state is not None:
+                self._canvas.itemconfigure(bg_item, state="hidden")
+                self._canvas.itemconfigure(txt_item, state="hidden")
+                self._bgm_tooltip_applied_state = None
+            return
+
+        label = self._bgm_tooltip_label(target_rect.key)
+        if not label:
+            return
+        cache_key = (self.mood.key, label)
+        cached = self._bgm_tooltip_cache.get(cache_key)
+        if cached is None:
+            cached = build_tooltip_pill_photo(
+                label,
+                self._hud_font_obj,
+                height=BGM_TOOLTIP_HEIGHT,
+                master=self._root,
+                mood=self.mood,
+            )
+            self._bgm_tooltip_cache[cache_key] = cached
+        photo, tip_w = cached
+
+        if self._last_viewport is not None:
+            _cw, _ch, x0, x1, _y_top, _y_bot = self._last_viewport
+        else:
+            x0 = -WINDOW_WIDTH * 0.5
+            x1 = WINDOW_WIDTH * 0.5
+
+        anchor_x = target_rect.icon_x + 7.0
+        min_cx = x0 + HUD_MARGIN_X + tip_w * 0.5
+        max_cx = x1 - HUD_MARGIN_X - tip_w * 0.5
+        tip_x = _clamp(anchor_x, min_cx, max(min_cx, max_cx))
+        tip_y = (
+            self._bgm_y
+            - BGM_HUD_HEIGHT * 0.5
+            - BGM_TOOLTIP_GAP
+            - BGM_TOOLTIP_HEIGHT * 0.5
+        )
+        tip_text_y = compute_hud_text_y(tip_y, self._hud_font_obj)
+        ink_hex = hud_ink_hex(1.0, self.mood)
+
+        state = (target_rect.key, label, self.mood.key, round(tip_x, 2), round(tip_y, 2))
+        if state != self._bgm_tooltip_applied_state:
+            self._canvas.itemconfigure(bg_item, image=photo, state="normal")
+            self._canvas.coords(bg_item, tip_x, -tip_y)
+            self._canvas.itemconfigure(
+                txt_item, text=label, fill=ink_hex, state="normal"
+            )
+            self._canvas.coords(txt_item, tip_x, -tip_text_y)
+            self._canvas.tag_raise(bg_item)
+            self._canvas.tag_raise(txt_item)
+            self._bgm_tooltip_applied_state = state
+
+    def _update_bgm_visual(self, *, force_rebuild: bool = False) -> None:
+        track = self._bgm_player.current_track
+        title = track.title if track is not None else "No Audio"
+        track_key = str(track.path) if track is not None else ""
+        is_playing, elapsed_sec, duration_sec, _bands = self._bgm_player.snapshot()
+        if track_key != self._bgm_applied_track_key:
+            self._bgm_known_duration = duration_sec
+            self._bgm_applied_track_key = track_key
+        elif duration_sec > 0.0:
+            self._bgm_known_duration = duration_sec
+        dur = self._bgm_known_duration
+
+        show_labels = self._is_expanded_window_mode()
+        if not show_labels:
+            self._bgm_label_blend = 0.0 if is_playing else 1.0
+            slot_w_override: int | None = None
+            resize_step = 0
+            play_btn_label = ""
+        else:
+            w_pause = int(self._hud_font_obj.measure("A: Pause"))
+            w_resume = int(self._hud_font_obj.measure("A: Resume"))
+            eased_resize = _smootherstep(self._bgm_label_blend)
+            resize_step = min(
+                BGM_RESIZE_STEPS,
+                max(0, int(round(eased_resize * BGM_RESIZE_STEPS))),
+            )
+            slot_w_override = int(
+                round(_lerp(w_pause, w_resume, resize_step / float(BGM_RESIZE_STEPS)))
+            )
+            play_btn_label = (
+                "A: Pause" if (is_playing or eased_resize < 0.78) else "A: Resume"
+            )
+
+        active_layout = resolve_bgm_pill_layout(
+            title,
+            dur,
+            is_playing,
+            self._hud_font_obj,
+            self._fps_font_obj,
+            show_labels=show_labels,
+            max_width=self._bgm_max_w,
+            height=BGM_HUD_HEIGHT,
+            play_slot_w_override=slot_w_override,
+        )
+        text_signature = (
+            active_layout.title_text,
+            active_layout.time_sample,
+            active_layout.show_labels,
+            tuple(btn_key for btn_key, _rx, _lbl in active_layout.button_segments),
+            len(active_layout.separators),
+            self.mood.key,
+            int(self._bgm_max_w or 0),
+        )
+
+        eased = _smootherstep(self._hud_enable_blend)
+        step_idx = min(
+            HUD_TRANSITION_STEPS,
+            max(0, int(round(eased * HUD_TRANSITION_STEPS))),
+        )
+        desired_color = hud_ink_hex(eased, self.mood)
+        time_text = format_bgm_time(elapsed_sec, dur, compact=active_layout.compact_time)
+
+        geom_signature = (
+            active_layout.pill_width,
+            active_layout.icon_signature,
+            is_playing,
+            resize_step,
+            self.mood.key,
+            step_idx,
+        )
+
+        if self._last_viewport is not None:
+            _cw, _ch, x0, _x1, y_top, _y_bot = self._last_viewport
+        else:
+            x0 = -WINDOW_WIDTH * 0.5
+            y_top = WINDOW_HEIGHT * 0.5
+        fps_y = (
+            self._fps_y
+            if self._fps_bg_item is not None
+            else (y_top - HUD_MARGIN_Y - FPS_BADGE_HEIGHT * 0.5)
+        )
+
+        if force_rebuild or text_signature != self._bgm_applied_text_signature:
+            self._bgm_layout = active_layout
+            self._bgm_applied_text_signature = text_signature
+            self._bgm_applied_geom_signature = None
+            self._bgm_applied_step = -1
+            self._bgm_applied_playing = is_playing
+            self._bgm_applied_play_label = play_btn_label
+
+            self._bgm_x = x0 + HUD_MARGIN_X + active_layout.pill_width * 0.5
+            self._bgm_y = (
+                fps_y - FPS_BADGE_HEIGHT * 0.5 - BGM_STACK_GAP - active_layout.pill_height * 0.5
+            )
+            self._bgm_text_y = compute_hud_text_y(self._bgm_y, self._hud_font_obj)
+            self._bgm_hit_rects = place_bgm_hit_rects(
+                self._bgm_x, self._bgm_y, active_layout
+            )
+
+            self._bgm_pen.clear()
+            self._bgm_pen.pencolor(desired_color)
+            self._bgm_btn_text_items.clear()
+            self._bgm_sep_items.clear()
+
+            self._bgm_pen.goto(self._bgm_x + active_layout.title_x_offset, self._bgm_text_y)
+            self._bgm_pen.write(
+                active_layout.title_text,
+                move=False,
+                align="left",
+                font=self._hud_font_tuple,
+            )
+            self._bgm_title_item = self._bgm_pen.items[-1]
+
+            self._bgm_pen.goto(self._bgm_x + active_layout.time_x_offset, self._bgm_text_y)
+            self._bgm_pen.write(
+                time_text, move=False, align="left", font=self._fps_font_tuple
+            )
+            self._bgm_time_item = self._bgm_pen.items[-1]
+
+            for btn_key, rel_x, btn_label in active_layout.button_segments:
+                rendered_label = play_btn_label if btn_key == "play_pause" else btn_label
+                self._bgm_pen.goto(self._bgm_x + rel_x, self._bgm_text_y)
+                self._bgm_pen.write(
+                    rendered_label, move=False, align="left", font=self._hud_font_tuple
+                )
+                self._bgm_btn_text_items[btn_key] = self._bgm_pen.items[-1]
+
+            for rel_x, sep_txt in active_layout.separators:
+                self._bgm_pen.goto(self._bgm_x + rel_x, self._bgm_text_y)
+                self._bgm_pen.write(
+                    sep_txt, move=False, align="left", font=self._hud_font_tuple
+                )
+                self._bgm_sep_items.append((rel_x, self._bgm_pen.items[-1]))
+
+            self._bgm_applied_time_text = time_text
+            self._bgm_applied_color = desired_color
+            self._bgm_viz_applied_levels = [-1.0] * BGM_VIZ_BAR_COUNT
+
+            if self._bgm_bg_item is not None:
+                self._canvas.coords(self._bgm_bg_item, self._bgm_x, -self._bgm_y)
+            self._reposition_bgm_viz_items()
+            self._raise_overlays()
+        elif geom_signature != self._bgm_applied_geom_signature:
+            prev_layout = self._bgm_layout
+            self._bgm_layout = active_layout
+            self._bgm_applied_playing = is_playing
+            if play_btn_label != self._bgm_applied_play_label:
+                play_txt_id = self._bgm_btn_text_items.get("play_pause")
+                if play_txt_id is not None:
+                    self._canvas.itemconfigure(play_txt_id, text=play_btn_label)
+                self._bgm_applied_play_label = play_btn_label
+            if (
+                prev_layout is None
+                or active_layout.pill_width != prev_layout.pill_width
+                or active_layout.button_segments != prev_layout.button_segments
+                or active_layout.separators != prev_layout.separators
+            ):
+                self._bgm_x = x0 + HUD_MARGIN_X + active_layout.pill_width * 0.5
+                self._bgm_y = (
+                    fps_y
+                    - FPS_BADGE_HEIGHT * 0.5
+                    - BGM_STACK_GAP
+                    - active_layout.pill_height * 0.5
+                )
+                self._bgm_text_y = compute_hud_text_y(self._bgm_y, self._hud_font_obj)
+                self._bgm_hit_rects = place_bgm_hit_rects(
+                    self._bgm_x, self._bgm_y, active_layout
+                )
+                self._reposition_bgm_items()
+
+        if self._bgm_bg_item is not None and geom_signature != self._bgm_applied_geom_signature:
+            pill_photo = self._get_bgm_pill_step(active_layout, step_idx, playing=is_playing)
+            self._canvas.itemconfigure(self._bgm_bg_item, image=pill_photo)
+            self._bgm_applied_step = step_idx
+            self._bgm_applied_geom_signature = geom_signature
+
+        if desired_color != self._bgm_applied_color:
+            for item_id in (self._bgm_title_item, self._bgm_time_item):
+                if item_id is not None:
+                    self._canvas.itemconfigure(item_id, fill=desired_color)
+            for item_id in self._bgm_btn_text_items.values():
+                self._canvas.itemconfigure(item_id, fill=desired_color)
+            for _rel_x, item_id in self._bgm_sep_items:
+                self._canvas.itemconfigure(item_id, fill=desired_color)
+            self._bgm_applied_color = desired_color
+
+        viz_color = self._bgm_visualizer_hex(is_playing, eased)
+        if viz_color != self._bgm_applied_viz_color:
+            for bar_id in self._bgm_viz_items:
+                self._canvas.itemconfigure(bar_id, fill=viz_color)
+            self._bgm_applied_viz_color = viz_color
+
+    def _reposition_bgm_items(self) -> None:
+        if self._bgm_bg_item is not None:
+            self._canvas.coords(self._bgm_bg_item, self._bgm_x, -self._bgm_y)
+        if self._bgm_layout is None:
+            return
+        if self._bgm_title_item is not None:
+            self._canvas.coords(
+                self._bgm_title_item,
+                self._bgm_x + self._bgm_layout.title_x_offset - 1.0,
+                -self._bgm_text_y,
+            )
+        if self._bgm_time_item is not None:
+            self._canvas.coords(
+                self._bgm_time_item,
+                self._bgm_x + self._bgm_layout.time_x_offset - 1.0,
+                -self._bgm_text_y,
+            )
+        for btn_key, rel_x, _btn_lbl in self._bgm_layout.button_segments:
+            item_id = self._bgm_btn_text_items.get(btn_key)
+            if item_id is not None:
+                self._canvas.coords(
+                    item_id, self._bgm_x + rel_x - 1.0, -self._bgm_text_y
+                )
+        for (rel_x, _sep_txt), (_old_rel_x, item_id) in zip(
+            self._bgm_layout.separators, self._bgm_sep_items
+        ):
+            self._canvas.coords(
+                item_id, self._bgm_x + rel_x - 1.0, -self._bgm_text_y
+            )
+        self._reposition_bgm_viz_items()
+
+    def _reposition_bgm_viz_items(self) -> None:
+        layout = self._bgm_layout
+        if layout is None:
+            return
+        for idx, bar_id in enumerate(self._bgm_viz_items):
+            rel_vx = layout.viz_bar_xs[idx]
+            vx = self._bgm_x + rel_vx
+            half_h = self._bgm_viz_levels[idx]
+            self._canvas.coords(bar_id, vx, -self._bgm_y - half_h, vx, -self._bgm_y + half_h)
+            self._bgm_viz_applied_levels[idx] = half_h
+
+    def _update_bgm_frame(self, dt: float) -> None:
+        layout = self._bgm_layout
+        if layout is None:
+            return
+        track = self._bgm_player.current_track
+        track_key = str(track.path) if track is not None else ""
+        is_playing, elapsed_sec, duration_sec, bands = self._bgm_player.snapshot()
+        if track_key != self._bgm_applied_track_key or (
+            duration_sec > 0.0 and abs(duration_sec - self._bgm_known_duration) > 1.0
+        ):
+            self._bgm_known_duration = duration_sec
+            self._bgm_applied_track_key = track_key
+            if self._last_viewport is not None:
+                self._bgm_max_w, self._species_max_w = self._resolve_row2_budgets(
+                    self._last_viewport[0],
+                    show_labels=self._is_expanded_window_mode(),
+                )
+                self._update_species_visual(force_rebuild=False)
+            self._update_bgm_visual(force_rebuild=True)
+            self._update_bgm_tooltip()
+            layout = self._bgm_layout
+            if layout is None:
+                return
+
+        show_labels = self._is_expanded_window_mode()
+        target_label_blend = 0.0 if is_playing else 1.0
+        blend_changed = False
+        if not show_labels:
+            if self._bgm_label_blend != target_label_blend:
+                self._bgm_label_blend = target_label_blend
+                blend_changed = True
+        elif self._bgm_label_blend != target_label_blend:
+            if BGM_RESIZE_DURATION <= 0.0:
+                self._bgm_label_blend = target_label_blend
+            else:
+                delta = dt / BGM_RESIZE_DURATION
+                if self._bgm_label_blend < target_label_blend:
+                    self._bgm_label_blend = min(
+                        target_label_blend, self._bgm_label_blend + delta
+                    )
+                else:
+                    self._bgm_label_blend = max(
+                        target_label_blend, self._bgm_label_blend - delta
+                    )
+            blend_changed = True
+
+        if blend_changed or is_playing != self._bgm_applied_playing:
+            self._update_bgm_visual(force_rebuild=False)
+            layout = self._bgm_layout
+            if layout is None:
+                return
+
+        time_text = format_bgm_time(
+            elapsed_sec, self._bgm_known_duration, compact=layout.compact_time
+        )
+        if time_text != self._bgm_applied_time_text and self._bgm_time_item is not None:
+            self._canvas.itemconfigure(self._bgm_time_item, text=time_text)
+            self._bgm_applied_time_text = time_text
+
+        eased = _smootherstep(self._hud_enable_blend)
+        viz_color = self._bgm_visualizer_hex(is_playing, eased)
+        if viz_color != self._bgm_applied_viz_color:
+            for bar_id in self._bgm_viz_items:
+                self._canvas.itemconfigure(bar_id, fill=viz_color)
+            self._bgm_applied_viz_color = viz_color
+
+        attack = 1.0 - math.exp(-22.0 * dt)
+        decay = 1.0 - math.exp(-9.0 * dt)
+        for idx, bar_id in enumerate(self._bgm_viz_items):
+            energy = bands[idx] if is_playing else 0.0
+            target_h = _lerp(BGM_VIZ_MIN_HALF_H, BGM_VIZ_MAX_HALF_H, energy)
+            cur_h = self._bgm_viz_levels[idx]
+            rate = attack if target_h > cur_h else decay
+            new_h = cur_h + (target_h - cur_h) * rate
+            self._bgm_viz_levels[idx] = new_h
+            if abs(new_h - self._bgm_viz_applied_levels[idx]) >= 0.03:
+                vx = self._bgm_x + layout.viz_bar_xs[idx]
+                self._canvas.coords(
+                    bar_id, vx, -self._bgm_y - new_h, vx, -self._bgm_y + new_h
+                )
+                self._bgm_viz_applied_levels[idx] = new_h
+
     # -- HUD Positioning & Viewport Sync -------------------------------------
 
     def _speed_fraction(self) -> float:
@@ -6635,12 +8502,16 @@ class FlowerViewerApp:
                 -self._fps_text_y,
             )
 
+        self._reposition_faces_items()
+
         if self._switcher_bg_item is not None:
             self._canvas.coords(self._switcher_bg_item, self._switcher_x, -self._switcher_y)
         for rel_x, item_id in self._switcher_text_items:
             self._canvas.coords(
                 item_id, self._switcher_x + rel_x - 1.0, -self._switcher_text_y
             )
+
+        self._reposition_bgm_items()
 
         if self._species_bg_item is not None:
             self._canvas.coords(self._species_bg_item, self._species_x, -self._species_y)
@@ -6651,6 +8522,56 @@ class FlowerViewerApp:
 
         self._speed_slider.reposition()
         self._bloom_slider.reposition()
+
+    def _resolve_row2_budgets(
+        self, cw: int, *, show_labels: bool = False
+    ) -> tuple[int, int]:
+        """Compute non-overlapping Row 2 max widths for the BGM (left) and Species (right) pills."""
+        row2_avail = max(120, int(cw - HUD_MARGIN_X * 2))
+        full_species_w = resolve_species_pill_layout(
+            self.species,
+            self._hud_font_obj,
+            self._fps_font_obj,
+            max_width=None,
+            height=SPECIES_HUD_HEIGHT,
+        ).pill_width
+        tier2_species_w = resolve_species_pill_layout(
+            self.species,
+            self._hud_font_obj,
+            self._fps_font_obj,
+            max_width=320,
+            height=SPECIES_HUD_HEIGHT,
+        ).pill_width
+        track = self._bgm_player.current_track
+        title = track.title if track is not None else "No Audio"
+        full_bgm_w = resolve_bgm_pill_layout(
+            title,
+            self._bgm_known_duration,
+            False,
+            self._hud_font_obj,
+            self._fps_font_obj,
+            show_labels=show_labels,
+            max_width=None,
+            height=BGM_HUD_HEIGHT,
+        ).pill_width
+
+        if full_bgm_w + SWITCHER_MIN_GAP + full_species_w <= row2_avail:
+            return (full_bgm_w, full_species_w)
+
+        tier2_bgm_budget = int(row2_avail - SWITCHER_MIN_GAP - tier2_species_w)
+        min_comfortable = 380 if show_labels else 250
+        if tier2_bgm_budget >= min_comfortable:
+            return (max(210, tier2_bgm_budget), tier2_species_w)
+
+        species_probe = resolve_species_pill_layout(
+            self.species,
+            self._hud_font_obj,
+            self._fps_font_obj,
+            max_width=max(84, int(row2_avail * 0.28)),
+            height=SPECIES_HUD_HEIGHT,
+        )
+        bgm_budget = max(140, int(row2_avail - SWITCHER_MIN_GAP - species_probe.pill_width))
+        return (bgm_budget, species_probe.pill_width)
 
     def _sync_hud_to_viewport(self) -> None:
         self._resize_after_id = None
@@ -6669,9 +8590,11 @@ class FlowerViewerApp:
             return
 
         viewport = (cw, ch, x0, x1, y_top, y_bottom)
-        if viewport == self._last_viewport:
+        expanded = self._is_expanded_window_mode()
+        if viewport == self._last_viewport and expanded == self._last_expanded_mode:
             return
         self._last_viewport = viewport
+        self._last_expanded_mode = expanded
         self._viewport_fov_scale = FOV_SCALE * _clamp(
             min(cw, ch) / float(WINDOW_SIZE), 0.4, 4.0
         )
@@ -6681,18 +8604,23 @@ class FlowerViewerApp:
         self._hud_y = y_bottom + HUD_MARGIN_Y + HUD_HEIGHT * 0.5
         self._hud_text_y = compute_hud_text_y(self._hud_y, self._hud_font_obj)
 
-        # Top-left FPS badge
+        # Top-left FPS & mesh Faces badges
         fps_w = self._fps_photo.width() if self._fps_photo is not None else 79
+        faces_w = self._faces_photo.width() if self._faces_photo is not None else 96
         self._fps_x = x0 + HUD_MARGIN_X + fps_w * 0.5
         self._fps_y = y_top - HUD_MARGIN_Y - FPS_BADGE_HEIGHT * 0.5
         self._fps_text_y = compute_hud_text_y(self._fps_y, self._fps_font_obj)
+        self._faces_x = self._fps_x + fps_w * 0.5 + FACES_BADGE_GAP + faces_w * 0.5
+        self._faces_y = self._fps_y
+        self._faces_text_y = compute_hud_text_y(self._faces_y, self._fps_font_obj)
 
-        # Top-right compact switcher pill & Species pill directly below
-        self._switcher_max_w = max(
-            120, int(cw - HUD_MARGIN_X - fps_w - SWITCHER_MIN_GAP - HUD_MARGIN_X)
-        )
+        # Top-right compact switcher pill & Row 2 pills (BGM left, Species right)
+        self._switcher_max_w = self._row1_switcher_max_w(cw)
         self._update_switcher_visual(force_rebuild=True)
-        self._species_max_w = max(120, int(cw - HUD_MARGIN_X * 2))
+        self._bgm_max_w, self._species_max_w = self._resolve_row2_budgets(
+            cw, show_labels=expanded
+        )
+        self._update_bgm_visual(force_rebuild=True)
         self._update_species_visual(force_rebuild=True)
 
         # Bottom HUD pill responsive width
@@ -6746,6 +8674,7 @@ class FlowerViewerApp:
 
         self._reposition_hud_items()
         self._recompute_bottom_hud_hit_rects()
+        self._update_bgm_tooltip()
 
     def _on_canvas_configure(self, _event: tk.Event[tk.Misc]) -> None:
         if self._resize_after_id is None and self.running:
@@ -6765,15 +8694,29 @@ class FlowerViewerApp:
         for item_id in (
             self._fps_bg_item,
             self._fps_text_item,
+            self._faces_bg_item,
+            self._faces_text_item,
             self._switcher_bg_item,
+            self._bgm_bg_item,
+            self._bgm_title_item,
+            self._bgm_time_item,
             self._species_bg_item,
         ):
             if item_id is not None:
                 self._canvas.tag_raise(item_id)
+        for bar_id in self._bgm_viz_items:
+            self._canvas.tag_raise(bar_id)
+        for item_id in self._bgm_btn_text_items.values():
+            self._canvas.tag_raise(item_id)
+        for _rel_x, item_id in self._bgm_sep_items:
+            self._canvas.tag_raise(item_id)
         for _rel_x, item_id in self._switcher_text_items:
             self._canvas.tag_raise(item_id)
         for _rel_x, item_id in self._species_text_items:
             self._canvas.tag_raise(item_id)
+        for item_id in (self._bgm_tooltip_bg_item, self._bgm_tooltip_text_item):
+            if item_id is not None:
+                self._canvas.tag_raise(item_id)
 
     def _update_hud_text(self, *, force_rebuild_text: bool = False) -> None:
         max_step = max(0, len(self._hud_transition_pills) - 1)
@@ -6829,6 +8772,8 @@ class FlowerViewerApp:
         self._sync_bloom_slider_visual(step_idx=step_idx, ink_color=desired_color)
         if self._switcher_bg_item is not None:
             self._update_switcher_visual(force_rebuild=False)
+        if self._bgm_bg_item is not None:
+            self._update_bgm_visual(force_rebuild=False)
         if self._species_bg_item is not None:
             self._update_species_visual(force_rebuild=False)
 
@@ -6867,6 +8812,7 @@ class FlowerViewerApp:
         canvas.bind("<B1-Motion>", self._on_mouse_drag)
         canvas.bind("<ButtonRelease-1>", self._on_mouse_up)
         canvas.bind("<Motion>", self._on_mouse_motion)
+        canvas.bind("<Leave>", self._on_mouse_leave)
         canvas.bind("<MouseWheel>", self._on_mouse_wheel)
         canvas.bind("<Shift-MouseWheel>", self._on_shift_mouse_wheel)
         canvas.bind("<Button-4>", lambda _e: self._adjust_zoom(1.08))
@@ -6876,6 +8822,12 @@ class FlowerViewerApp:
 
         self.screen.listen()
         self._bind_key("space", self.toggle_pause)
+        self._bind_key("a", self.toggle_bgm)
+        self._bind_key("A", self.toggle_bgm)
+        self._bind_key("s", self.prev_bgm)
+        self._bind_key("S", self.prev_bgm)
+        self._bind_key("d", self.next_bgm)
+        self._bind_key("D", self.next_bgm)
         self._bind_key("b", self.replay_bloom)
         self._bind_key("B", self.replay_bloom)
         self._bind_key("r", self.reset_view)
@@ -6892,8 +8844,8 @@ class FlowerViewerApp:
         self._bind_key("M", self.cycle_mood)
         self._bind_key("w", self.toggle_breeze)
         self._bind_key("W", self.toggle_breeze)
-        self._bind_key("d", self.toggle_detail_tier)
-        self._bind_key("D", self.toggle_detail_tier)
+        self._bind_key("t", self.toggle_detail_tier)
+        self._bind_key("T", self.toggle_detail_tier)
         self._bind_key("F11", self.toggle_fullscreen)
         self._bind_key("Escape", self._on_escape)
         self._bind_key("plus", lambda: self._adjust_zoom(1.1))
@@ -6933,9 +8885,29 @@ class FlowerViewerApp:
             self._speed_slider.contains(cx, cy)
             or self._bloom_slider.contains(cx, cy)
             or (hit_test_switcher(cx, cy, self._switcher_hit_rects) is not None)
+            or (hit_test_bgm_pill(cx, cy, self._bgm_hit_rects) is not None)
             or (hit_test_species_pill(cx, cy, self._species_hit_rects) is not None)
             or (hit_test_bottom_hud(cx, cy, self._current_hud_hit_rects()) is not None)
         )
+
+    def toggle_bgm(self) -> None:
+        if self._controls_locked:
+            return
+        self._bgm_player.toggle()
+        self._update_bgm_visual(force_rebuild=False)
+        self._update_bgm_tooltip()
+
+    def prev_bgm(self) -> None:
+        if self._controls_locked:
+            return
+        self._bgm_player.previous()
+        self._bgm_viz_levels = [BGM_VIZ_MIN_HALF_H] * BGM_VIZ_BAR_COUNT
+
+    def next_bgm(self) -> None:
+        if self._controls_locked:
+            return
+        self._bgm_player.next()
+        self._bgm_viz_levels = [BGM_VIZ_MIN_HALF_H] * BGM_VIZ_BAR_COUNT
 
     # -- Botanical Species & Customization Actions ---------------------------
 
@@ -6987,6 +8959,7 @@ class FlowerViewerApp:
             self._tween_start_zoom = spec.startup_zoom
             self._sync_bloom_slider_visual()
 
+        self._update_faces_badge()
         self._update_hud_text()
 
     def cycle_species(self) -> None:
@@ -7034,6 +9007,7 @@ class FlowerViewerApp:
         self._fps_applied_tier = self._fps_tier
         self._fps_applied_ink = ink
         self._fps_applied_mood_key = spec.key
+        self._update_faces_badge()
 
         self._rebuild_hud_pills(self._hud_max_w)
         self._speed_slider.apply_mood(spec)
@@ -7041,6 +9015,7 @@ class FlowerViewerApp:
         self._update_hud_text(force_rebuild_text=False)
         self._reposition_hud_items()
         self._recompute_bottom_hud_hit_rects()
+        self._update_bgm_tooltip()
 
     def cycle_mood(self) -> None:
         if self._controls_locked:
@@ -7061,6 +9036,7 @@ class FlowerViewerApp:
         self.detail_tier = spec
         self.mesh.set_detail_tier(spec, bloom=self.current_bloom)
         self._poly_pool.ensure_capacity(len(self.mesh.faces))
+        self._update_faces_badge()
         self._update_switcher_visual()
 
     def toggle_detail_tier(self) -> None:
@@ -7118,14 +9094,26 @@ class FlowerViewerApp:
         frac = self._bloom_slider.canvas_x_to_fraction(cx)
         self.set_bloom(BLOOM_MIN + frac * (BLOOM_MAX - BLOOM_MIN), from_user=True)
 
+    def _on_mouse_leave(self, _event: tk.Event[tk.Misc]) -> None:
+        if self._bgm_tooltip_hover_key is not None:
+            self._bgm_tooltip_hover_key = None
+            self._update_bgm_tooltip()
+
     def _on_mouse_motion(self, event: tk.Event[tk.Misc]) -> None:
         if self._controls_locked:
             self._set_canvas_cursor("")
+            if self._bgm_tooltip_hover_key is not None:
+                self._bgm_tooltip_hover_key = None
+                self._update_bgm_tooltip()
             return
         if self._dragging_speed or self._dragging_bloom:
             self._set_canvas_cursor("hand2")
             return
         cx, cy = self._event_to_canvas_coords(event)
+        bgm_hover = hit_test_bgm_pill(cx, cy, self._bgm_hit_rects)
+        if bgm_hover != self._bgm_tooltip_hover_key:
+            self._bgm_tooltip_hover_key = bgm_hover
+            self._update_bgm_tooltip()
         self._set_canvas_cursor("hand2" if self._is_interactive_hud_hit(cx, cy) else "")
 
     def _on_mouse_down(self, event: tk.Event[tk.Misc]) -> None:
@@ -7163,6 +9151,17 @@ class FlowerViewerApp:
                 self.toggle_detail_tier()
             return
 
+        bgm_key = hit_test_bgm_pill(cx, cy, self._bgm_hit_rects)
+        if bgm_key is not None:
+            self._set_canvas_cursor("hand2")
+            if bgm_key == "play_pause":
+                self.toggle_bgm()
+            elif bgm_key == "prev":
+                self.prev_bgm()
+            elif bgm_key == "next":
+                self.next_bgm()
+            return
+
         sp_key = hit_test_species_pill(cx, cy, self._species_hit_rects)
         if sp_key is not None:
             self._set_canvas_cursor("hand2")
@@ -7187,6 +9186,9 @@ class FlowerViewerApp:
             return
 
         self._cancel_camera_transitions()
+        if self._bgm_tooltip_hover_key is not None:
+            self._bgm_tooltip_hover_key = None
+            self._update_bgm_tooltip()
         self._dragging = True
         self._last_mouse_x = event.x
         self._last_mouse_y = event.y
@@ -7327,6 +9329,8 @@ class FlowerViewerApp:
         self._species_entry_active = False
         self._inertia.cancel()
         self._set_canvas_cursor("")
+        self._bgm_tooltip_hover_key = None
+        self._update_bgm_tooltip()
         self.paused = False
         self._update_hud_text()
         self._camera_tween_active = False
@@ -7353,6 +9357,7 @@ class FlowerViewerApp:
 
     def close(self) -> None:
         self.running = False
+        self._bgm_player.close()
         for after_attr in ("_after_id", "_resize_after_id"):
             after_id = getattr(self, after_attr, None)
             if after_id is not None:
@@ -7366,10 +9371,21 @@ class FlowerViewerApp:
         self._speed_slider.cleanup()
         self._bloom_slider.cleanup()
 
+        for bar_id in self._bgm_viz_items:
+            try:
+                self._canvas.delete(bar_id)
+            except tk.TclError:
+                pass
+        self._bgm_viz_items.clear()
+
         for attr in (
             "_hud_bg_item",
             "_fps_bg_item",
+            "_faces_bg_item",
             "_switcher_bg_item",
+            "_bgm_bg_item",
+            "_bgm_tooltip_bg_item",
+            "_bgm_tooltip_text_item",
             "_species_bg_item",
         ):
             item_id = getattr(self, attr, None)
@@ -7380,7 +9396,14 @@ class FlowerViewerApp:
                     pass
                 setattr(self, attr, None)
 
-        for pen in (self._hud_pen, self._fps_pen, self._switcher_pen, self._species_pen):
+        for pen in (
+            self._hud_pen,
+            self._fps_pen,
+            self._faces_pen,
+            self._switcher_pen,
+            self._bgm_pen,
+            self._species_pen,
+        ):
             try:
                 pen.clear()
             except (turtle.Terminator, tk.TclError):
@@ -7389,10 +9412,18 @@ class FlowerViewerApp:
         self._hud_text_items.clear()
         self._switcher_text_items.clear()
         self._species_text_items.clear()
+        self._bgm_btn_text_items.clear()
+        self._bgm_sep_items.clear()
+        self._bgm_title_item = None
+        self._bgm_time_item = None
         self._fps_text_item = None
+        self._faces_text_item = None
         self._hud_pill_cache.clear()
         self._fps_photo_cache.clear()
+        self._faces_photo_cache.clear()
         self._switcher_pill_cache.clear()
+        self._bgm_step_cache.clear()
+        self._bgm_tooltip_cache.clear()
         self._species_pill_cache.clear()
         self._hud_transition_pills.clear()
         self._switcher_transition_pills.clear()
@@ -7401,6 +9432,7 @@ class FlowerViewerApp:
         self._hud_pill_paused = None
         self._hud_pill_disabled = None
         self._fps_photo = None
+        self._faces_photo = None
         self._app_icon_photo = None
 
         try:
@@ -7510,6 +9542,8 @@ class FlowerViewerApp:
                 else:
                     self._hud_enable_blend = max(target_blend, self._hud_enable_blend - delta)
             self._update_hud_text()
+
+        self._update_bgm_frame(dt)
 
         try:
             self._render_frame()
